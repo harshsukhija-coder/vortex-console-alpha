@@ -1560,6 +1560,52 @@ input:checked + .toggle-slider:before {
   background-color: var(--text-muted);
 }
 
+.setup-rate-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.setup-rate-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-heading);
+}
+
+.setup-rate-kind {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.setup-rate-pill.solo {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.setup-rate-pill.solo .setup-rate-kind {
+  color: var(--success);
+}
+
+.setup-rate-pill.multi {
+  border-color: rgba(139, 92, 246, 0.28);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.setup-rate-pill.multi .setup-rate-kind {
+  color: var(--accent);
+}
+
 .booking-info-box {
   background-color: var(--bg-card-hover);
   border: 1px solid var(--border);

@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer';
+import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
 import { API_BASE_URL } from './lib/api';
+import { formatSetupRatesShort, getSetupRateForPlayers, getSetupRates } from './lib/setupRates';
 import {
   fetchUpcomingSchedule,
   formatScheduleDate,
@@ -790,7 +792,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             phoneNumber: inst.currentBooking.phoneNumber,
             minutesThreshold: t.mins,
             secondsLeft: secsLeft,
-            setupInfo: `${inst.setup?.consoleType} (₹${inst.setup?.chargePerPersonPerHour}/person/hr)`
+            setupInfo: `${inst.setup?.consoleType} · ${formatSetupRatesShort(inst.setup)}`
           });
 
           setLogs((prev) => [
@@ -937,7 +939,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             instanceId: inst.instanceId,
             instanceName: inst.instanceName,
             phoneNumber: inst.currentBooking.phoneNumber,
-            setupInfo: `${inst.setup?.consoleType} (₹${inst.setup?.chargePerPersonPerHour}/person/hr)`,
+            setupInfo: `${inst.setup?.consoleType} · ${formatSetupRatesShort(inst.setup)}`,
             startLabel: inst.currentBooking.startTime || formatTimeStr(getBookingStartTime(inst.currentBooking)),
           });
         });
@@ -1481,17 +1483,17 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name }))
       },
       pricing: {
-        basePrice: slotPricing?.basePrice ?? (selectedInstanceForBooking.setup.chargePerPersonPerHour * bookingPlayers * bookingHours),
-        ratePerPersonPerHour: slotPricing?.ratePerPersonPerHour ?? selectedInstanceForBooking.setup.chargePerPersonPerHour,
+        basePrice: slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours),
+        ratePerPersonPerHour: slotPricing?.ratePerPersonPerHour ?? getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)),
         playerType: slotPricing?.playerType ?? (bookingPlayers === 1 ? 'SINGLE_PLAYER' : 'MULTIPLAYER'),
-        calculationFormula: slotPricing?.calculationFormula ?? `₹${selectedInstanceForBooking.setup.chargePerPersonPerHour}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(selectedInstanceForBooking.setup.chargePerPersonPerHour || 0) * bookingPlayers * bookingHours}`
+        calculationFormula: slotPricing?.calculationFormula ?? `₹${getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers))}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours}`
       },
       offers: {
         appliedOfferIds: selectedOfferIds,
         appliedOffers: selectedOffersObjects,
-        originalAmount: bookingReview?.originalAmount || (slotPricing?.basePrice ?? (selectedInstanceForBooking.setup.chargePerPersonPerHour * bookingPlayers * bookingHours)),
+        originalAmount: bookingReview?.originalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
         discountApplied: bookingReview?.discountApplied || 0,
-        totalAmount: bookingReview?.totalAmount || (slotPricing?.basePrice ?? (selectedInstanceForBooking.setup.chargePerPersonPerHour * bookingPlayers * bookingHours))
+        totalAmount: bookingReview?.totalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours))
       }
     };
 
@@ -1552,7 +1554,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const elapsed = Math.max(1, Math.round((endDate.getTime() - startTimeDate.getTime()) / (1000 * 60)));
     // Standard gaming lounge rule: round up to nearest 15 minutes, minimum 15 mins
     const charged = Math.max(15, Math.ceil(elapsed / 15) * 15);
-    const ratePerHour = targetInst.setup?.chargePerPersonPerHour || 50;
+    const ratePerHour = getSetupRateForPlayers(targetInst.setup, booking.playersCount || 1) || 50;
     const players = booking.playersCount || 1;
     const basePrice = Math.round(ratePerHour * players * (charged / 60));
 
@@ -1589,7 +1591,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const startTimeDate = new Date(booking.startTime || now);
     const elapsed = Math.max(1, Math.round((now.getTime() - startTimeDate.getTime()) / (1000 * 60)));
     const charged = Math.max(15, Math.ceil(elapsed / 15) * 15);
-    const ratePerHour = inst.setup?.chargePerPersonPerHour || 50;
+    const ratePerHour = getSetupRateForPlayers(inst.setup, booking.playersCount || 1) || 50;
     const players = booking.playersCount || 1;
     const basePrice = Math.round(ratePerHour * players * (charged / 60));
 
@@ -1996,7 +1998,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             totalDurationHours: ((targetBooking?.requestedNoOfHours || 1) + (minsToExtend / 60))
           },
           pricing: data.pricing || {
-            ratePerPersonPerHour: targetInst?.setup?.chargePerPersonPerHour || 120,
+            ratePerPersonPerHour: getSetupRateForPlayers(targetInst?.setup, targetBooking?.playersCount || 1) || 120,
             playerType: (targetBooking?.playersCount || 1) > 1 ? 'MULTIPLAYER' : 'SINGLE_PLAYER',
             previousOriginalAmount: targetBooking?.amountCharged || 0,
             previousTotalAmount: targetBooking?.amountCharged || 0,
@@ -2605,9 +2607,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     <h3 className="station-name">{inst.instanceName}</h3>
                                     <div className="station-meta-row">
                                       <span>{inst.setup.consoleType}</span>
-                                      <span className="station-divider"></span>
-                                      <span>₹{inst.setup.chargePerPersonPerHour}/hr</span>
                                     </div>
+                                    <SetupRatePills setup={inst.setup} />
                                   </div>
                                   
                                   {/* Simple Status badge */}
@@ -3262,7 +3263,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               {/* ── STEP 5: Booking Details & Slot Timing ── */}
                               {bookingStep === 5 && (() => {
                                 const parsedTime = parseTimeComponents(bookingTime);
-                                const estimatedBase = slotPricing ? slotPricing.basePrice : ((selectedInstanceForBooking.setup.chargePerPersonPerHour || 0) * bookingPlayers * bookingHours);
+                                const estimatedBase = slotPricing ? slotPricing.basePrice : ((getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours);
                                 const calculatedEnd = calculateSlotEndTime(bookingTime, bookingHours);
                                 const selectedGamesObjects = availableGames.filter((g) => selectedGameIds.includes(g.id));
 
@@ -3525,7 +3526,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                 {slotPricing?.playerType === 'SINGLE_PLAYER' ? 'Single Player' : 'Multiplayer'}
                                               </span>
                                               <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
-                                                Rate: ₹{slotPricing?.ratePerPersonPerHour || selectedInstanceForBooking.setup.chargePerPersonPerHour}/{bookingPlayers > 1 ? 'player/' : ''}hr
+                                                Rate: {formatSetupRatesShort(selectedInstanceForBooking.setup)}{slotPricing?.ratePerPersonPerHour ? ` · using ₹${slotPricing.ratePerPersonPerHour}/hr` : ''}
                                               </span>
                                             </div>
                                             <div style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--accent)' }}>
@@ -3746,10 +3747,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name }))
                                   },
                                   pricing: {
-                                    basePrice: slotPricing?.basePrice ?? (selectedInstanceForBooking.setup.chargePerPersonPerHour * bookingPlayers * bookingHours),
-                                    ratePerPersonPerHour: slotPricing?.ratePerPersonPerHour ?? selectedInstanceForBooking.setup.chargePerPersonPerHour,
+                                    basePrice: slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours),
+                                    ratePerPersonPerHour: slotPricing?.ratePerPersonPerHour ?? getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)),
                                     playerType: slotPricing?.playerType ?? (bookingPlayers === 1 ? 'SINGLE_PLAYER' : 'MULTIPLAYER'),
-                                    calculationFormula: slotPricing?.calculationFormula ?? `₹${selectedInstanceForBooking.setup.chargePerPersonPerHour}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(selectedInstanceForBooking.setup.chargePerPersonPerHour || 0) * bookingPlayers * bookingHours}`
+                                    calculationFormula: slotPricing?.calculationFormula ?? `₹${getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers))}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours}`
                                   },
                                   offers: {
                                     appliedOfferIds: selectedOfferIds,
@@ -4772,7 +4773,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               <option value="">-- Choose Physical Console Station --</option>
                               {occupancyData.map((inst: any) => (
                                 <option key={inst.instanceId} value={inst.instanceId}>
-                                  {inst.instanceName} ({inst.setup?.consoleType} · ₹{inst.setup?.chargePerPersonPerHour}/hr) - [{inst.status}]
+                                  {inst.instanceName} ({inst.setup?.consoleType} · {formatSetupRatesShort(inst.setup)}) - [{inst.status}]
                                 </option>
                               ))}
                             </select>
@@ -4951,7 +4952,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             Extend Active Gaming Session
                           </h3>
                           <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                            {extendingSessionInstance.instanceName} · {extendingSessionInstance.setup?.consoleType} (₹{extendingSessionInstance.setup?.chargePerPersonPerHour}/person/hr)
+                            {extendingSessionInstance.instanceName} · {extendingSessionInstance.setup?.consoleType} ({formatSetupRatesShort(extendingSessionInstance.setup)})
                           </p>
                         </div>
                         <button className="modal-close-btn" onClick={() => !isExtensionSubmitting && setExtendingSessionInstance(null)}>
@@ -5052,8 +5053,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           {(() => {
                             const isMulti = (extendingSessionInstance.currentBooking?.playersCount || 1) > 1;
                             const setupRate = isMulti 
-                              ? (extendingSessionInstance.setup?.multiplayerPrice || extendingSessionInstance.setup?.chargePerPersonPerHour || 120)
-                              : (extendingSessionInstance.setup?.singlePlayerPrice || extendingSessionInstance.setup?.chargePerPersonPerHour || 150);
+                              ? (getSetupRates(extendingSessionInstance.setup).multi || 120)
+                              : (getSetupRates(extendingSessionInstance.setup).single || 150);
                             const players = extendingSessionInstance.currentBooking?.playersCount || 1;
                             const addedCharge = Math.round((extensionMinutes / 60) * setupRate * players);
                             const currentCharged = Number(extendingSessionInstance.currentBooking?.amountCharged || 0);
@@ -5290,7 +5291,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <div>
                           <h3 className="modal-title" style={{ color: 'var(--error)' }}>End Session & Checkout</h3>
                           <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                            {terminatingInstance.instanceName} · {terminatingInstance.setup?.consoleType} (₹{terminatingInstance.setup?.chargePerPersonPerHour}/person/hr)
+                            {terminatingInstance.instanceName} · {terminatingInstance.setup?.consoleType} ({formatSetupRatesShort(terminatingInstance.setup)})
                           </p>
                         </div>
                         <button className="modal-close-btn" onClick={() => !isTerminating && setTerminatingInstance(null)}>
