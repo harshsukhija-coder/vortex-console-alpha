@@ -559,6 +559,16 @@
   color: var(--danger);
 }
 
+.metric-badge.blue {
+  background-color: var(--accent-light);
+  color: var(--accent);
+}
+
+.metric-badge.purple {
+  background-color: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
+}
+
 .metric-progress-bar {
   height: 6px;
   background: #f1f5f9;
@@ -1589,6 +1599,20 @@ input:checked + .toggle-slider:before {
 
 .occupancy-card.tentative {
   border-left-color: var(--warning);
+}
+
+.occupancy-card.scheduled {
+  border-left-color: #a855f7;
+}
+
+.next-session-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.28);
 }
 
 .occupancy-header {

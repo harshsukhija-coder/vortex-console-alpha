@@ -1,5 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer';
+import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
 import { API_BASE_URL } from './lib/api';
+import {
+  fetchUpcomingSchedule,
+  formatScheduleDate,
+  getNextUpcomingForInstance,
+  type UpcomingBooking,
+} from './lib/schedule';
+import { formatCountdown, secondsUntilIso } from './lib/sessionTiming';
 import './App.css';
 
 // Log item interface for platform updates feed
@@ -57,7 +66,7 @@ function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // Dashboard Sub-navigation Tabs State
-  const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'tentative' | 'bookings' | 'sessions'>('bookings');
+  const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule'>('bookings');
 
   // Past Sessions date-filtered ledger
   const [pastSessionsDate, setPastSessionsDate] = useState<string>(() => {
@@ -294,21 +303,29 @@ function App() {
   const [isLoadingTerminateOffers, setIsLoadingTerminateOffers] = useState<boolean>(false);
   const [sessionSummaryResult, setSessionSummaryResult] = useState<any | null>(null);
 
-  // Live countdown timers: bookingId -> seconds remaining
+  // Live countdown timers: bookingId -> seconds remaining / until start
   const [countdownMap, setCountdownMap] = useState<Record<number, number>>({});
+  const [startCountdownMap, setStartCountdownMap] = useState<Record<number, number>>({});
+  const [upcomingSchedule, setUpcomingSchedule] = useState<UpcomingBooking[]>([]);
+  const [isScheduleLoading, setIsScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleTimezone, setScheduleTimezone] = useState('Asia/Kolkata');
 
-  // Session Warning Alert Modal State (5m, 3m, 1m, 0m thresholds)
+  // Session Warning Alert Modal State (start 10m/5m, end 10m/5m/3m/1m/0m)
   interface SessionWarningAlert {
+    kind: 'ending' | 'starting';
     instanceId: number;
     instanceName: string;
     bookingId: number;
     phoneNumber: string;
-    minutesThreshold: 5 | 3 | 1 | 0;
+    minutesThreshold: 10 | 5 | 3 | 1 | 0;
     secondsLeft: number;
     setupInfo: string;
+    startLabel?: string;
   }
   const [activeSessionAlert, setActiveSessionAlert] = useState<SessionWarningAlert | null>(null);
   const dismissedAlertsRef = useRef<Record<string, boolean>>({});
+  const startedRefreshRef = useRef<Record<number, boolean>>({});
 
   // Booking extension states
   const [extendingSessionInstance, setExtendingSessionInstance] = useState<SetupInstance | null>(null);
@@ -494,6 +511,29 @@ function App() {
   }
 }, [authToken]);
 
+  const fetchScheduleData = useCallback(async (silent = false) => {
+    if (!authToken) return;
+    if (!silent) {
+      setIsScheduleLoading(true);
+      setScheduleError(null);
+    }
+
+    try {
+      const data = await fetchUpcomingSchedule({ token: authToken, days: 14 });
+      if (data.success) {
+        setUpcomingSchedule(data.upcoming || []);
+        if (data.timezone) setScheduleTimezone(data.timezone);
+        setScheduleError(null);
+      } else {
+        setScheduleError(data.error || data.message || 'Failed to load upcoming schedule.');
+      }
+    } catch {
+      setScheduleError('Failed to connect to the schedule API.');
+    } finally {
+      if (!silent) setIsScheduleLoading(false);
+    }
+  }, [authToken]);
+
 // Fetch tentative bookings for selected date
 const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   if (!authToken) return;
@@ -600,11 +640,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     if (currentHash === '#/dashboard' && authToken) {
       const loadTimer = setTimeout(() => {
         fetchOccupancyData();
+        fetchScheduleData(true);
       }, 0);
 
-      // Poll every 20 seconds to refresh remaining duration
+      // Poll every 20 seconds to refresh remaining duration and upcoming slots
       const pollTimer = setInterval(() => {
         fetchOccupancyData(true);
+        fetchScheduleData(true);
       }, 20000);
 
       return () => {
@@ -612,7 +654,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         clearInterval(pollTimer);
       };
     }
-  }, [currentHash, authToken, fetchOccupancyData]);
+  }, [currentHash, authToken, fetchOccupancyData, fetchScheduleData]);
 
   // Auto scroll logs
   useEffect(() => {
@@ -634,7 +676,35 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   const getBookingStartTime = (booking: any): string => {
     if (!booking) return '';
-    return booking.startTime || booking.actualStartTime || booking.sessionStartTime || booking.requestedStartTime || '';
+    return booking.startTimeIso || booking.startTime || booking.actualStartTime || booking.sessionStartTime || booking.requestedStartTime || '';
+  };
+
+  const resolveBookingStartMs = (booking: any): number | null => {
+    if (!booking) return null;
+    if (booking.startTimeIso) {
+      const isoMs = new Date(booking.startTimeIso).getTime();
+      if (!Number.isNaN(isoMs)) return isoMs;
+    }
+    const bookingId = getBookingId(booking);
+    const scheduled = upcomingSchedule.find((item) => item.bookingId === bookingId);
+    if (scheduled?.startTimeIso) {
+      const scheduledMs = new Date(scheduled.startTimeIso).getTime();
+      if (!Number.isNaN(scheduledMs)) return scheduledMs;
+    }
+    return parseTimestampMs(getBookingStartTime(booking), booking.date);
+  };
+
+  const isBookingPendingStart = (booking: any, nowMs = Date.now()): boolean => {
+    if (!booking) return false;
+    const startMs = resolveBookingStartMs(booking);
+    return startMs !== null && startMs > nowMs;
+  };
+
+  const calculateSecondsUntilStart = (booking: any, nowMs = Date.now()): number => {
+    if (!booking) return 0;
+    const startMs = resolveBookingStartMs(booking);
+    if (!startMs || startMs <= nowMs) return 0;
+    return Math.floor((startMs - nowMs) / 1000);
   };
 
   // Robust date & time parser: handles full ISO strings, 12h AM/PM, cross-day dates
@@ -670,6 +740,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   // Calculate live seconds remaining with robust fallbacks
   const calculateBookingSecondsRemaining = (booking: any, nowMs = Date.now()): number => {
     if (!booking) return 0;
+    if (isBookingPendingStart(booking, nowMs)) return 0;
     const endTimeStr = getBookingEndTime(booking);
     const endMs = parseTimestampMs(endTimeStr);
 
@@ -691,14 +762,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     return 0;
   };
 
-  // Helper to check 5m, 3m, 1m, and 0m (expired) warning thresholds
+  // Helper to check 10m, 5m, 3m, 1m, and 0m (expired) warning thresholds
   const checkWarningThresholds = (inst: SetupInstance, secsLeft: number) => {
-    if (!inst.currentBooking) return;
+    if (!inst.currentBooking || isBookingPendingStart(inst.currentBooking)) return;
     const bookingId = getBookingId(inst.currentBooking);
     if (bookingId <= 0) return;
 
-    // Threshold definitions: 5m (300s), 3m (180s), 1m (60s), 0m (expired)
-    const thresholds: Array<{ mins: 5 | 3 | 1 | 0; minSec: number; maxSec: number }> = [
+    const thresholds: Array<{ mins: 10 | 5 | 3 | 1 | 0; minSec: number; maxSec: number }> = [
+      { mins: 10, minSec: 541, maxSec: 600 },
       { mins: 5, minSec: 241, maxSec: 300 },
       { mins: 3, minSec: 121, maxSec: 180 },
       { mins: 1, minSec: 1, maxSec: 60 },
@@ -707,12 +778,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
     for (const t of thresholds) {
       if (secsLeft >= t.minSec && secsLeft <= t.maxSec) {
-        const alertKey = `${bookingId}-${t.mins}`;
+        const alertKey = `${bookingId}-end-${t.mins}`;
         if (!dismissedAlertsRef.current[alertKey]) {
           dismissedAlertsRef.current[alertKey] = true;
 
-          // Trigger warning alert modal
           setActiveSessionAlert({
+            kind: 'ending',
             instanceId: inst.instanceId,
             instanceName: inst.instanceName,
             bookingId,
@@ -722,7 +793,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             setupInfo: `${inst.setup?.consoleType} (₹${inst.setup?.chargePerPersonPerHour}/person/hr)`
           });
 
-          // Log to live console feed
           setLogs((prev) => [
             ...prev,
             {
@@ -740,11 +810,53 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
+  const checkStartThresholds = (
+    bookingId: number,
+    secsUntilStart: number,
+    meta: { instanceId: number; instanceName: string; phoneNumber: string; setupInfo: string; startLabel: string }
+  ) => {
+    if (bookingId <= 0 || secsUntilStart <= 0) return;
+
+    const thresholds: Array<{ mins: 10 | 5; minSec: number; maxSec: number }> = [
+      { mins: 10, minSec: 541, maxSec: 600 },
+      { mins: 5, minSec: 241, maxSec: 300 },
+    ];
+
+    for (const t of thresholds) {
+      if (secsUntilStart >= t.minSec && secsUntilStart <= t.maxSec) {
+        const alertKey = `${bookingId}-start-${t.mins}`;
+        if (!dismissedAlertsRef.current[alertKey]) {
+          dismissedAlertsRef.current[alertKey] = true;
+          setActiveSessionAlert({
+            kind: 'starting',
+            instanceId: meta.instanceId,
+            instanceName: meta.instanceName,
+            bookingId,
+            phoneNumber: meta.phoneNumber,
+            minutesThreshold: t.mins,
+            secondsLeft: secsUntilStart,
+            setupInfo: meta.setupInfo,
+            startLabel: meta.startLabel,
+          });
+          setLogs((prev) => [
+            ...prev,
+            {
+              id: `log-start-${Date.now()}-${t.mins}`,
+              type: 'warning',
+              message: `[SESSION STARTING] ${meta.instanceName} starts in ${t.mins} min for ${meta.phoneNumber}.`,
+              timestamp: getTimestamp()
+            }
+          ]);
+          break;
+        }
+      }
+    }
+  };
+
   // Live countdown timer: date-aware, stops at 0, decrements every second
   useEffect(() => {
-    if (occupancyData.length === 0) return;
+    if (occupancyData.length === 0 && upcomingSchedule.length === 0) return;
 
-    // Seed countdown map on fresh data load
     setCountdownMap((prev) => {
       const freshMap: Record<number, number> = { ...prev };
       occupancyData.forEach((inst) => {
@@ -752,16 +864,41 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           const booking = inst.currentBooking;
           const bookingId = getBookingId(booking);
           if (bookingId > 0) {
-            // Recalculate or retain extended seconds
-            const calculatedSecs = calculateBookingSecondsRemaining(booking);
-            // If prev has higher extended value, keep it, otherwise update
-            if (freshMap[bookingId] === undefined || calculatedSecs > 0) {
-              freshMap[bookingId] = calculatedSecs;
+            if (isBookingPendingStart(booking)) {
+              delete freshMap[bookingId];
+            } else {
+              const calculatedSecs = calculateBookingSecondsRemaining(booking);
+              if (freshMap[bookingId] === undefined || calculatedSecs > 0) {
+                freshMap[bookingId] = calculatedSecs;
+              }
             }
           }
         }
       });
       return freshMap;
+    });
+
+    setStartCountdownMap((prev) => {
+      const next: Record<number, number> = { ...prev };
+      occupancyData.forEach((inst) => {
+        if (!inst.currentBooking) return;
+        const bookingId = getBookingId(inst.currentBooking);
+        if (bookingId <= 0) return;
+        if (isBookingPendingStart(inst.currentBooking)) {
+          next[bookingId] = calculateSecondsUntilStart(inst.currentBooking);
+        } else {
+          delete next[bookingId];
+        }
+      });
+      upcomingSchedule.forEach((item) => {
+        const secs = secondsUntilIso(item.startTimeIso);
+        if (secs > 0) {
+          next[item.bookingId] = secs;
+        } else {
+          delete next[item.bookingId];
+        }
+      });
+      return next;
     });
 
     const tickId = setInterval(() => {
@@ -773,9 +910,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           }
         }
 
-        // Check warning thresholds on active stations
         occupancyData.forEach((inst) => {
-          if (inst.currentBooking && (inst.status === 'OCCUPIED' || inst.status === 'TENTATIVE')) {
+          if (inst.currentBooking && (inst.status === 'OCCUPIED' || inst.status === 'TENTATIVE') && !isBookingPendingStart(inst.currentBooking)) {
             const bId = getBookingId(inst.currentBooking);
             const remaining = next[bId] !== undefined ? next[bId] : 0;
             checkWarningThresholds(inst, remaining);
@@ -784,10 +920,67 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
         return next;
       });
+
+      setStartCountdownMap((prev) => {
+        const next = { ...prev };
+        for (const key in next) {
+          if (next[key] > 0) {
+            next[key] -= 1;
+          }
+        }
+
+        occupancyData.forEach((inst) => {
+          if (!inst.currentBooking || !isBookingPendingStart(inst.currentBooking)) return;
+          const bookingId = getBookingId(inst.currentBooking);
+          const secs = next[bookingId] ?? 0;
+          checkStartThresholds(bookingId, secs, {
+            instanceId: inst.instanceId,
+            instanceName: inst.instanceName,
+            phoneNumber: inst.currentBooking.phoneNumber,
+            setupInfo: `${inst.setup?.consoleType} (₹${inst.setup?.chargePerPersonPerHour}/person/hr)`,
+            startLabel: inst.currentBooking.startTime || formatTimeStr(getBookingStartTime(inst.currentBooking)),
+          });
+        });
+
+        upcomingSchedule.forEach((item) => {
+          const matched = occupancyData.find((inst) => inst.instanceId === item.setupInstanceId);
+          if (matched?.currentBooking && getBookingId(matched.currentBooking) === item.bookingId) return;
+          const secs = next[item.bookingId] ?? 0;
+          checkStartThresholds(item.bookingId, secs, {
+            instanceId: item.setupInstanceId,
+            instanceName: item.setupName,
+            phoneNumber: item.phoneNumber,
+            setupInfo: `${item.playersCount} ${item.playersCount === 1 ? 'player' : 'players'} · ${formatScheduleDate(item.date)}`,
+            startLabel: `${item.startTime} · ${formatScheduleDate(item.date)}`,
+          });
+        });
+
+        return next;
+      });
     }, 1000);
 
     return () => clearInterval(tickId);
-  }, [occupancyData]);
+  }, [occupancyData, upcomingSchedule]);
+
+  useEffect(() => {
+    Object.entries(startCountdownMap).forEach(([id, secs]) => {
+      const bookingId = Number(id);
+      if (secs === 0 && !startedRefreshRef.current[bookingId]) {
+        startedRefreshRef.current[bookingId] = true;
+        fetchOccupancyData(true);
+        fetchScheduleData(true);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: `log-start-now-${bookingId}-${Date.now()}`,
+            type: 'info',
+            message: `Session #${bookingId} start time reached. Refreshing station occupancy.`,
+            timestamp: getTimestamp(),
+          },
+        ]);
+      }
+    });
+  }, [startCountdownMap, fetchOccupancyData, fetchScheduleData]);
 
   // Generate current timestamp string
   const getTimestamp = () => {
@@ -1340,6 +1533,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       setBookingStep(1);
       setBookingReview(null);
       fetchOccupancyData();
+      fetchScheduleData(true);
       fetchTentativeBookings(tentativeDate);
     } catch (err: any) {
       setBookingFormError(err.message || 'Server connection failure. Ensure backend engine is online.');
@@ -1521,6 +1715,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         setSessionSummaryResult(summary);
 
         fetchOccupancyData();
+        fetchScheduleData(true);
         fetchTentativeBookings(tentativeDate);
         if (activeDashboardTab === 'sessions') {
           fetchPastSessions(pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter);
@@ -1660,6 +1855,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       setConfirmingTentativeBooking(null);
       
       fetchOccupancyData();
+      fetchScheduleData(true);
       fetchTentativeBookings(tentativeDate);
     } catch (err: any) {
       setConfirmError(err.message || 'Error occurred during confirmation.');
@@ -1831,6 +2027,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
         // Fetch fresh state from backend in background
         fetchOccupancyData(true);
+        fetchScheduleData(true);
         fetchTentativeBookings(tentativeDate);
         if (activeDashboardTab === 'sessions') {
           fetchPastSessions(pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter);
@@ -1908,9 +2105,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   // Summary Metrics calculations
   const totalStations = occupancyData.length;
-  const occupiedCount = occupancyData.filter(s => s.status === 'OCCUPIED').length;
+  const occupiedCount = occupancyData.filter(s => s.status === 'OCCUPIED' && !(s.currentBooking && isBookingPendingStart(s.currentBooking))).length;
   const availableCount = occupancyData.filter(s => s.status === 'AVAILABLE').length;
   const tentativeCount = occupancyData.filter(s => s.status === 'TENTATIVE').length;
+  const scheduledCount = upcomingSchedule.length;
 
   return (
     <>
@@ -2305,6 +2503,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                     </button>
 
                     <button 
+                      className={`sidebar-btn ${activeDashboardTab === 'schedule' ? 'active' : ''}`}
+                      onClick={() => setActiveDashboardTab('schedule')}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                        <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"></path>
+                      </svg>
+                      Upcoming Schedule
+                    </button>
+
+                    <button 
                       className={`sidebar-btn ${activeDashboardTab === 'tentative' ? 'active' : ''}`}
                       onClick={() => setActiveDashboardTab('tentative')}
                     >
@@ -2359,13 +2571,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           </span>
                           <span className="station-divider" style={{ width: 4, height: 4, borderRadius: '50%', backgroundColor: 'var(--border)' }}></span>
                           <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>
+                            Scheduled: <span style={{ color: 'var(--warning)' }}>{scheduledCount}</span>
+                          </span>
+                          <span className="station-divider" style={{ width: 4, height: 4, borderRadius: '50%', backgroundColor: 'var(--border)' }}></span>
+                          <span style={{ fontWeight: 600, color: 'var(--text-heading)' }}>
                             Available: <span style={{ color: 'var(--success)' }}>{availableCount}</span>
                           </span>
                         </p>
                       </div>
                       <button 
                         className="btn-refresh" 
-                        onClick={() => fetchOccupancyData(false)}
+                        onClick={() => {
+                          fetchOccupancyData(false);
+                          fetchScheduleData(true);
+                        }}
                         disabled={isOccupancyLoading}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ animation: isOccupancyLoading ? 'spin 1.5s infinite linear' : 'none' }}>
@@ -2397,10 +2616,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           </div>
                         ) : (
                           <div className="occupancy-grid">
-                            {occupancyData.map((inst) => (
+                            {occupancyData.map((inst) => {
+                              const pendingStart = Boolean(inst.currentBooking && isBookingPendingStart(inst.currentBooking));
+                              const currentBookingId = inst.currentBooking ? getBookingId(inst.currentBooking) : 0;
+                              const nextUpcoming = getNextUpcomingForInstance(
+                                upcomingSchedule,
+                                inst.instanceId,
+                                currentBookingId || undefined,
+                              );
+                              const cardStatus = pendingStart ? 'scheduled' : inst.status.toLowerCase();
+                              return (
                               <div 
                                 key={inst.instanceId} 
-                                className={`occupancy-card ${inst.status.toLowerCase()} ${inst.isActive ? '' : 'disabled'}`}
+                                className={`occupancy-card ${cardStatus} ${inst.isActive ? '' : 'disabled'}`}
                               >
                                 <div className="occupancy-header">
                                   <div className="station-details">
@@ -2415,6 +2643,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   {/* Simple Status badge */}
                                   <span 
                                     className={`metric-badge ${
+                                      pendingStart ? 'purple' :
                                       inst.status === 'AVAILABLE' ? 'green' : 
                                       inst.status === 'OCCUPIED' ? 'blue' : 'amber'
                                     }`}
@@ -2424,11 +2653,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       height: 6, 
                                       borderRadius: '50%', 
                                       backgroundColor: 
+                                        pendingStart ? '#a855f7' :
                                         inst.status === 'AVAILABLE' ? 'var(--success)' : 
                                         inst.status === 'OCCUPIED' ? 'var(--accent)' : 'var(--warning)', 
                                       display: 'inline-block' 
                                     }}></span>
-                                    {inst.status === 'OCCUPIED' ? 'Occupied' : inst.status === 'AVAILABLE' ? 'Available' : 'Tentative'}
+                                    {pendingStart ? 'Scheduled' : inst.status === 'OCCUPIED' ? 'Occupied' : inst.status === 'AVAILABLE' ? 'Available' : 'Tentative'}
                                   </span>
                                 </div>
 
@@ -2466,73 +2696,43 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       )}
                                     </div>
 
-                                    {/* Time remaining — live countdown with progress bar */}
                                     {(() => {
                                        const booking = inst.currentBooking;
                                        const bookingId = getBookingId(booking);
-                                       let secsLeft = countdownMap[bookingId];
-
-                                       // Sane fallback if not yet in map
+                                       const pending = isBookingPendingStart(booking);
+                                       let secsLeft = pending
+                                         ? startCountdownMap[bookingId]
+                                         : countdownMap[bookingId];
                                        if (secsLeft === undefined) {
-                                         secsLeft = calculateBookingSecondsRemaining(booking);
+                                         secsLeft = pending
+                                           ? calculateSecondsUntilStart(booking)
+                                           : calculateBookingSecondsRemaining(booking);
                                        }
-                                       
-                                       const isExpired = secsLeft <= 0;
-                                       const is1Min = secsLeft > 0 && secsLeft <= 60;
-                                       const is3Min = secsLeft > 60 && secsLeft <= 180;
-                                       const is5Min = secsLeft > 180 && secsLeft <= 300;
-
-                                       let displayStr: string;
-                                       if (isExpired) {
-                                         displayStr = '00m 00s (TIME UP)';
-                                       } else {
-                                         const hrs = Math.floor(secsLeft / 3600);
-                                         const m = Math.floor((secsLeft % 3600) / 60);
-                                         const s = secsLeft % 60;
-                                         if (hrs > 0) {
-                                           displayStr = `${hrs}h ${m}m ${String(s).padStart(2, '0')}s`;
-                                         } else {
-                                           displayStr = `${m}m ${String(s).padStart(2, '0')}s`;
-                                         }
-                                       }
-
-                                       // Calculate total session length in seconds
                                        const startMs = parseTimestampMs(getBookingStartTime(booking));
                                        const endMs = parseTimestampMs(getBookingEndTime(booking));
-                                       const totalSecs = (startMs && endMs && endMs > startMs) 
+                                       const totalSecs = (startMs && endMs && endMs > startMs)
                                          ? Math.floor((endMs - startMs) / 1000)
                                          : Math.max(60, ((booking.timeLeftMinutes || 60) * 60));
-                                       
-                                       const pct = isExpired ? 0 : Math.max(0, Math.min(100, (secsLeft / totalSecs) * 100));
-                                       
-                                       // Dynamic warning colors
-                                       const barColor = isExpired || is1Min ? 'var(--error)' : is3Min ? '#f97316' : is5Min ? 'var(--warning)' : inst.status === 'TENTATIVE' ? 'var(--warning)' : 'var(--accent)';
-
+                                       const startLabel = booking.startTime && !String(booking.startTime).includes('T')
+                                         ? booking.startTime
+                                         : formatTimeStr(getBookingStartTime(booking));
+                                       const endLabel = booking.endTime && !String(booking.endTime).includes('T')
+                                         ? booking.endTime
+                                         : formatTimeStr(getBookingEndTime(booking));
                                        return (
-                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                             <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={barColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                                 <circle cx="12" cy="12" r="10"></circle>
-                                                 <polyline points="12 6 12 12 16 14"></polyline>
-                                               </svg>
-                                               <span style={{ fontSize: '0.72rem', fontWeight: 600, color: isExpired ? 'var(--error)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                                 {isExpired ? 'SESSION EXPIRED' : is1Min ? '1 MIN LEFT' : is3Min ? '3 MINS LEFT' : is5Min ? '5 MINS LEFT' : 'TIME REMAINING'}
-                                               </span>
-                                             </div>
-                                             <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', fontWeight: 800, color: barColor, letterSpacing: '0.05em' }}>
-                                               {displayStr}
-                                             </span>
-                                           </div>
-                                           {/* Progress bar */}
-                                           <div style={{ height: '4px', borderRadius: '4px', background: 'var(--border)', overflow: 'hidden' }}>
-                                             <div style={{ height: '100%', width: `${pct}%`, borderRadius: '4px', background: barColor, transition: 'width 1s linear' }} />
-                                           </div>
-                                         </div>
+                                         <OccupancySessionTimer
+                                           isPendingStart={pending}
+                                           secsLeft={secsLeft}
+                                           totalSecs={totalSecs}
+                                           status={inst.status}
+                                           startLabel={startLabel}
+                                           endLabel={endLabel}
+                                         />
                                        );
                                      })()}
 
-                                     {/* Action buttons */}
+                                     {/* Action buttons — only after the session has actually started */}
+                                     {!pendingStart && (
                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                        <div style={{ display: 'flex', gap: '5px' }}>
                                          <button
@@ -2576,6 +2776,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                          ⏹ End Session
                                        </button>
                                      </div>
+                                     )}
+
+                                     {pendingStart && (
+                                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, padding: '6px 8px', borderRadius: '6px', background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.25)' }}>
+                                         Session timer starts at the scheduled start time. You will get a 10 min and 5 min warning.
+                                       </div>
+                                     )}
 
                                   </div>
                                 ) : (
@@ -2588,13 +2795,29 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--success)' }}>Available</span>
                                       <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Ready for allocation</span>
                                     </div>
+                                    {nextUpcoming && (
+                                      <div className="next-session-banner">
+                                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                          Next session
+                                        </div>
+                                        <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                                          {formatScheduleDate(nextUpcoming.date)} · {nextUpcoming.startTime} – {nextUpcoming.endTime}
+                                        </div>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                          {nextUpcoming.phoneNumber} · {(startCountdownMap[nextUpcoming.bookingId] ?? secondsUntilIso(nextUpcoming.startTimeIso)) > 0
+                                            ? `Starts in ${formatCountdown(startCountdownMap[nextUpcoming.bookingId] ?? secondsUntilIso(nextUpcoming.startTimeIso))}`
+                                            : 'Starting now'}
+                                        </div>
+                                      </div>
+                                    )}
                                     <button className="btn-card-action primary" style={{ width: '100%' }} onClick={() => openBookingModal(inst)}>
                                       + Book Station
                                     </button>
                                   </div>
                                 )}
                               </div>
-                            ))}
+                            );
+                            })}
                           </div>
                         )}
 
@@ -3761,6 +3984,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                     </div>
 
                   </>
+                )}
+
+                {activeDashboardTab === 'schedule' && (
+                  <UpcomingScheduleList
+                    upcoming={upcomingSchedule}
+                    isLoading={isScheduleLoading}
+                    error={scheduleError}
+                    stations={occupancyData.map((inst) => ({ id: inst.instanceId, name: inst.instanceName }))}
+                    onRefresh={() => fetchScheduleData(false)}
+                    startCountdownMap={startCountdownMap}
+                    timezone={scheduleTimezone}
+                  />
                 )}
 
                 {/* TAB 2: Tentative Bookings Filtered list */}
@@ -5543,31 +5778,33 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </div>
                 )}
 
-                {/* Session Warning Alert Modal (5m, 3m, 1m, 0m Time Warning) */}
+                {/* Session Warning Alert Modal (start 10m/5m, end 10m/5m/3m/1m/0m) */}
                 {activeSessionAlert && (
                   <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setActiveSessionAlert(null)}>
                     <div 
                       className="modal-card" 
                       style={{ 
                         maxWidth: '500px', 
-                        border: `2px solid ${activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 3 ? '#f97316' : 'var(--warning)'}`,
-                        boxShadow: `0 0 30px ${activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`
+                        border: `2px solid ${activeSessionAlert.kind === 'starting' ? 'var(--accent)' : activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 3 ? '#f97316' : 'var(--warning)'}`,
+                        boxShadow: `0 0 30px ${activeSessionAlert.kind === 'starting' ? 'rgba(99, 102, 241, 0.25)' : activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'rgba(239, 68, 68, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`
                       }} 
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="modal-header" style={{ borderBottomColor: 'var(--border)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <span style={{ fontSize: '1.4rem' }}>
-                            {activeSessionAlert.minutesThreshold === 0 ? '🛑' : activeSessionAlert.minutesThreshold === 1 ? '🚨' : '⚠️'}
+                            {activeSessionAlert.kind === 'starting' ? '🗓️' : activeSessionAlert.minutesThreshold === 0 ? '🛑' : activeSessionAlert.minutesThreshold === 1 ? '🚨' : '⚠️'}
                           </span>
                           <div>
-                            <h3 className="modal-title" style={{ color: activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 3 ? '#f97316' : 'var(--warning)' }}>
-                              {activeSessionAlert.minutesThreshold === 0 
+                            <h3 className="modal-title" style={{ color: activeSessionAlert.kind === 'starting' ? 'var(--accent)' : activeSessionAlert.minutesThreshold === 0 || activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 3 ? '#f97316' : 'var(--warning)' }}>
+                              {activeSessionAlert.kind === 'starting'
+                                ? `Session starts in ${activeSessionAlert.minutesThreshold} minutes`
+                                : activeSessionAlert.minutesThreshold === 0 
                                 ? 'Session Time Expired'
                                 : `${activeSessionAlert.minutesThreshold} Minute${activeSessionAlert.minutesThreshold > 1 ? 's' : ''} Remaining`}
                             </h3>
                             <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                              Console Station Alert · Action Required
+                              {activeSessionAlert.kind === 'starting' ? 'Upcoming session notification' : 'Console Station Alert · Action Required'}
                             </p>
                           </div>
                         </div>
@@ -5615,21 +5852,28 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         {/* Visual Countdown Box */}
                         <div style={{ textAlign: 'center', padding: '16px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
                           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>
-                            Exact Time Remaining
+                            {activeSessionAlert.kind === 'starting' ? 'Time until start' : 'Exact Time Remaining'}
                           </div>
-                          <div style={{ fontFamily: 'monospace', fontSize: '1.8rem', fontWeight: 900, color: activeSessionAlert.minutesThreshold === 0 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : '#f97316', margin: '6px 0' }}>
-                            {countdownMap[activeSessionAlert.bookingId] !== undefined && countdownMap[activeSessionAlert.bookingId] > 0
-                              ? `${Math.floor(countdownMap[activeSessionAlert.bookingId] / 60)}m ${String(countdownMap[activeSessionAlert.bookingId] % 60).padStart(2, '0')}s`
+                          <div style={{ fontFamily: 'monospace', fontSize: '1.8rem', fontWeight: 900, color: activeSessionAlert.kind === 'starting' ? 'var(--accent)' : activeSessionAlert.minutesThreshold === 0 ? 'var(--error)' : activeSessionAlert.minutesThreshold === 1 ? 'var(--error)' : '#f97316', margin: '6px 0' }}>
+                            {activeSessionAlert.kind === 'starting'
+                              ? (startCountdownMap[activeSessionAlert.bookingId] > 0
+                                ? formatCountdown(startCountdownMap[activeSessionAlert.bookingId])
+                                : 'Starting now')
+                              : countdownMap[activeSessionAlert.bookingId] !== undefined && countdownMap[activeSessionAlert.bookingId] > 0
+                              ? formatCountdown(countdownMap[activeSessionAlert.bookingId])
                               : '00m 00s (TIME UP)'}
                           </div>
                           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            {activeSessionAlert.minutesThreshold === 0 
+                            {activeSessionAlert.kind === 'starting'
+                              ? `Next session starts at ${activeSessionAlert.startLabel || 'the scheduled time'}. Timer will begin only after start.`
+                              : activeSessionAlert.minutesThreshold === 0 
                               ? 'The allocated playing time has ended. Please settle payment or extend the slot.'
                               : 'Please check with the player if they wish to extend their gaming session or prepare for checkout.'}
                           </div>
                         </div>
 
                         {/* Quick Extension Options */}
+                        {activeSessionAlert.kind === 'ending' && (
                         <div>
                           <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-heading)', marginBottom: '8px' }}>
                             Quick Session Extension (1-Click)
@@ -5664,6 +5908,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             </button>
                           </div>
                         </div>
+                        )}
                       </div>
 
                       <div className="modal-footer">
@@ -5674,6 +5919,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         >
                           Acknowledge & Dismiss
                         </button>
+                        {activeSessionAlert.kind === 'ending' && (
                         <button 
                           type="button" 
                           className="btn-card-action"
@@ -5686,6 +5932,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         >
                           ⏹ End Session & Checkout
                         </button>
+                        )}
                       </div>
                     </div>
                   </div>
