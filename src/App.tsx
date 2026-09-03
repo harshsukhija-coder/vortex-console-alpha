@@ -1071,14 +1071,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  // Pre-fill test credentials
-  const handlePreFillCredentials = (email: string, pass: string) => {
-    setLoginEmail(email);
-    setLoginPassword(pass);
-    setLoginError(null);
-    setLoginInfoMessage(null);
-  };
-
   // Perform logout
   const handleLogout = () => {
     localStorage.removeItem('vortex_auth_token');
@@ -2425,7 +2417,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                       type="email"
                       id="email"
                       className="form-input"
-                      placeholder="e.g. meet@gmail.com"
+                      placeholder="admin@example.com"
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
                       required
@@ -2451,28 +2443,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                     {isLoginLoading ? 'Verifying...' : 'Sign In'}
                   </button>
                 </form>
-
-                <div className="credential-guidance">
-                  <span className="guidance-title">Select Security Keycard to Autofill</span>
-                  <div className="keycard-grid">
-                    <div 
-                      className="keycard-item"
-                      onClick={() => handlePreFillCredentials('meet@gmail.com', 'Meet@1234')}
-                    >
-                      <div className="keycard-role" style={{ color: 'var(--accent)' }}>Super Admin</div>
-                      <div className="keycard-email">meet@gmail.com</div>
-                      <div className="keycard-pass">••••••••</div>
-                    </div>
-                    <div 
-                      className="keycard-item"
-                      onClick={() => handlePreFillCredentials('harsh@gmail.com', 'Harsh@1234')}
-                    >
-                      <div className="keycard-role" style={{ color: 'var(--warning)' }}>Admin Console</div>
-                      <div className="keycard-email">harsh@gmail.com</div>
-                      <div className="keycard-pass">••••••••</div>
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           )}
