@@ -3,6 +3,7 @@ import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer'
 import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
 import { API_BASE_URL } from './lib/api';
+import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
 import { formatSetupRatesShort, getSetupRateForPlayers, getSetupRates } from './lib/setupRates';
 import {
   fetchUpcomingSchedule,
@@ -379,17 +380,52 @@ function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
+  const expireSession = useCallback((message: string | null = 'Your session has expired. Please sign in again.') => {
+    localStorage.removeItem('vortex_auth_token');
+    localStorage.removeItem('vortex_auth_user');
+    setAuthToken(null);
+    setAuthUser(null);
+    setOccupancyData([]);
+    setUpcomingSchedule([]);
+    setActiveSessionAlert(null);
+    setSelectedInstanceForBooking(null);
+    setExtendingSessionInstance(null);
+    setTerminatingInstance(null);
+    if (message) {
+      setLoginInfoMessage(message);
+    }
+    window.location.hash = '#/login';
+  }, []);
+
   // Handle Route Guarding & Redirection
   useEffect(() => {
     if (currentHash === '#/dashboard' && !authToken) {
       setTimeout(() => {
-        setLoginInfoMessage('Please sign in to access the control center.');
+        setLoginInfoMessage((prev) => prev ?? 'Please sign in to access the control center.');
       }, 0);
       window.location.hash = '#/login';
     } else if (currentHash === '#/login' && authToken) {
       window.location.hash = '#/dashboard';
     }
   }, [currentHash, authToken]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    if (isAuthTokenExpired(authToken)) {
+      expireSession();
+      return;
+    }
+
+    const expiryMs = getTokenExpiryMs(authToken);
+    if (expiryMs === null) return;
+
+    const delay = Math.max(0, expiryMs - Date.now());
+    const timerId = window.setTimeout(() => {
+      expireSession();
+    }, delay);
+
+    return () => window.clearTimeout(timerId);
+  }, [authToken, expireSession]);
 
   // Dynamic Pricing: Fetch real-time rate & calculation from POST /api/price
   useEffect(() => {
@@ -488,6 +524,10 @@ function App() {
 
       const response = await fetch(`${API_BASE_URL}/api/setup-instances/occupancy`, { headers });
       const data = await response.json();
+      if (isUnauthorizedResponse(response, data)) {
+        expireSession();
+        return;
+      }
 
       if (response.ok && data.success) {
         setOccupancyData(data.occupancy);
@@ -511,7 +551,7 @@ function App() {
       setIsOccupancyLoading(false);
     }
   }
-}, [authToken]);
+}, [authToken, expireSession]);
 
   const fetchScheduleData = useCallback(async (silent = false) => {
     if (!authToken) return;
@@ -522,6 +562,10 @@ function App() {
 
     try {
       const data = await fetchUpcomingSchedule({ token: authToken, days: 14 });
+      if (isUnauthorizedResponse({ status: data.httpStatus }, data)) {
+        expireSession();
+        return;
+      }
       if (data.success) {
         setUpcomingSchedule(data.upcoming || []);
         if (data.timezone) setScheduleTimezone(data.timezone);
@@ -534,7 +578,7 @@ function App() {
     } finally {
       if (!silent) setIsScheduleLoading(false);
     }
-  }, [authToken]);
+  }, [authToken, expireSession]);
 
 // Fetch tentative bookings for selected date
 const fetchTentativeBookings = useCallback(async (dateStr: string) => {
@@ -549,6 +593,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       }
     });
     const data = await response.json();
+    if (isUnauthorizedResponse(response, data)) {
+      expireSession();
+      return;
+    }
 
     if (response.ok && data.success) {
       setTentativeBookings(data.bookings);
@@ -569,7 +617,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   } finally {
     setIsTentativeLoading(false);
   }
-}, [authToken]);
+}, [authToken, expireSession]);
 
   // Fetch tentative bookings when tentative tab is active or date changes
   useEffect(() => {
@@ -603,6 +651,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         }
       });
       const data = await response.json();
+      if (isUnauthorizedResponse(response, data)) {
+        expireSession();
+        return;
+      }
 
       if (response.ok && data.success) {
         setPastSessionsData({
@@ -628,7 +680,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     } finally {
       setIsPastSessionsLoading(false);
     }
-  }, [authToken, pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter]);
+  }, [authToken, pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter, expireSession]);
 
   // Fetch past sessions when sessions tab is active or date/filter changes
   useEffect(() => {
@@ -1075,12 +1127,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   // Perform logout
   const handleLogout = () => {
-    localStorage.removeItem('vortex_auth_token');
-    localStorage.removeItem('vortex_auth_user');
-    setAuthToken(null);
-    setAuthUser(null);
-    setOccupancyData([]);
-    window.location.hash = '#/';
+    expireSession(null);
   };
 
   // Helper date/time formatters for bookings inputs
@@ -1508,6 +1555,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         body: JSON.stringify(finalBookingPayload)
       });
       const data = await res.json();
+      if (isUnauthorizedResponse(res, data)) {
+        expireSession();
+        return;
+      }
 
       if (!res.ok || !data.success) {
         throw new Error(data.error || data.message || 'Failed to allot slot and confirm booking.');
@@ -1683,6 +1734,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
+      if (isUnauthorizedResponse(res, data)) {
+        expireSession();
+        return;
+      }
 
       if (res.ok && data.success) {
         const summary = data.sessionSummary;
@@ -1932,6 +1987,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       });
 
       const data = await response.json();
+      if (isUnauthorizedResponse(response, data)) {
+        expireSession();
+        return;
+      }
       console.log('[Extend Session API] Response:', data);
 
       if (response.ok && data.success) {

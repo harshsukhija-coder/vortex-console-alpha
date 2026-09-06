@@ -26,6 +26,7 @@ export interface ScheduleResponse {
   upcoming?: UpcomingBooking[];
   error?: string;
   message?: string;
+  httpStatus?: number;
 }
 
 export interface ScheduleQuery {
@@ -51,7 +52,8 @@ export async function fetchUpcomingSchedule(
   const response = await fetch(`${API_BASE_URL}/api/schedule?${params.toString()}`, {
     headers,
   });
-  return response.json() as Promise<ScheduleResponse>;
+  const data = (await response.json()) as ScheduleResponse;
+  return { ...data, httpStatus: response.status };
 }
 
 export function getNextUpcomingForInstance(
