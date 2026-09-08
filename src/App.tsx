@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer';
 import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
-import { API_BASE_URL } from './lib/api';
+import { API_BASE_URL, assertSuccessfulJsonResponse } from './lib/api';
 import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
 import { formatSetupRatesShort, getSetupRateForPlayers, getSetupRates } from './lib/setupRates';
 import {
@@ -440,13 +440,17 @@ function App() {
       try {
         const res = await fetch(`${API_BASE_URL}/api/price`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`,
+          },
           body: JSON.stringify({
             setupId: selectedInstanceForBooking.setup.id,
             noOfPlayers: Number(bookingPlayers),
             sessionDuration: Number(bookingHours)
           })
         });
+        await assertSuccessfulJsonResponse(res);
         const data = await res.json();
         if (isMounted && res.ok && data.success && data.pricing) {
           setSlotPricing(data.pricing);
@@ -464,7 +468,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [selectedInstanceForBooking?.setup?.id, bookingPlayers, bookingHours]);
+  }, [selectedInstanceForBooking?.setup?.id, bookingPlayers, bookingHours, authToken]);
 
   // Fetch active games configured for the selected setup instance
   useEffect(() => {
@@ -482,7 +486,12 @@ function App() {
         if (gameSearchQuery.trim()) {
           url += `&q=${encodeURIComponent(gameSearchQuery.trim())}`;
         }
-        const res = await fetch(url);
+        const res = await fetch(url, {
+          headers: {
+            'Authorization': `Bearer ${authToken}`,
+          },
+        });
+        await assertSuccessfulJsonResponse(res);
         const data = await res.json();
         if (isMounted && res.ok && data.success && Array.isArray(data.games)) {
           setAvailableGames(data.games);
@@ -507,7 +516,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [selectedInstanceForBooking?.setup?.id, gameSearchQuery]);
+  }, [selectedInstanceForBooking?.setup?.id, gameSearchQuery, authToken]);
 
   // Fetch real-time setup occupancy status
   const fetchOccupancyData = useCallback(async (silent = false) => {
@@ -523,6 +532,11 @@ function App() {
       }
 
       const response = await fetch(`${API_BASE_URL}/api/setup-instances/occupancy`, { headers });
+      if (response.status === 401) {
+        expireSession();
+        return;
+      }
+      await assertSuccessfulJsonResponse(response);
       const data = await response.json();
       if (isUnauthorizedResponse(response, data)) {
         expireSession();
@@ -592,6 +606,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         'Authorization': `Bearer ${authToken}`
       }
     });
+    if (response.status === 401) {
+      expireSession();
+      return;
+    }
+    await assertSuccessfulJsonResponse(response);
     const data = await response.json();
     if (isUnauthorizedResponse(response, data)) {
       expireSession();
@@ -650,6 +669,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           'Authorization': `Bearer ${authToken}`
         }
       });
+      if (response.status === 401) {
+        expireSession();
+        return;
+      }
+      await assertSuccessfulJsonResponse(response);
       const data = await response.json();
       if (isUnauthorizedResponse(response, data)) {
         expireSession();
@@ -1098,6 +1122,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         }),
       });
 
+      await assertSuccessfulJsonResponse(response);
       const data = await response.json();
 
       if (response.ok && data.success) {
@@ -1118,8 +1143,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       } else {
         setLoginError(data.error || 'Invalid email or password. Please try again.');
       }
-    } catch {
-      setLoginError('Unable to connect to the login server. Please ensure the backend engine is reachable.');
+    } catch (error) {
+      setLoginError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to connect to the login server. Please ensure the backend engine is reachable.',
+      );
     } finally {
       setIsLoginLoading(false);
     }
@@ -1287,6 +1316,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const res = await fetch(`${API_BASE_URL}/api/customers/lookup?phone=${encodeURIComponent(cleanPhone)}`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      await assertSuccessfulJsonResponse(res);
       const data = await res.json();
       if (res.ok && data.success && data.customer) {
         setFoundCustomer(data.customer);
@@ -1319,6 +1349,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const res = await fetch(`${API_BASE_URL}/api/customers/lookup?phone=${encodeURIComponent(phone)}`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      await assertSuccessfulJsonResponse(res);
       const data = await res.json();
       if (res.ok && data.success && data.customer) {
         setAdditionalMembers(prev => {
@@ -1414,9 +1445,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       // Fetch offer eligibility first from /api/offers/evaluate
       const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
         body: JSON.stringify(fullEvaluationPayload)
       });
+      await assertSuccessfulJsonResponse(offerRes);
       const offerData = await offerRes.json();
 
       let initialSelectedOfferIds: number[] = [];
@@ -1439,9 +1474,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       // Fetch review summary with initial offer selection
       const reviewRes = await fetch(`${API_BASE_URL}/api/bookings/review`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
         body: JSON.stringify({ ...simplePayload, appliedOfferIds: initialSelectedOfferIds })
       });
+      await assertSuccessfulJsonResponse(reviewRes);
       const reviewData = await reviewRes.json();
       if (!reviewRes.ok || !reviewData.success) {
         throw new Error(reviewData.error || reviewData.message || 'Failed to load booking review.');
@@ -1473,9 +1512,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     try {
       const reviewRes = await fetch(`${API_BASE_URL}/api/bookings/review`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
         body: JSON.stringify(payload)
       });
+      await assertSuccessfulJsonResponse(reviewRes);
       const reviewData = await reviewRes.json();
       if (reviewRes.ok && reviewData.success) {
         setBookingReview(reviewData.summary);
@@ -1554,6 +1597,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         },
         body: JSON.stringify(finalBookingPayload)
       });
+      if (res.status === 401) {
+        expireSession();
+        return;
+      }
+      await assertSuccessfulJsonResponse(res);
       const data = await res.json();
       if (isUnauthorizedResponse(res, data)) {
         expireSession();
@@ -1660,7 +1708,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     try {
       const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
         body: JSON.stringify({
           setupInstanceId: inst.instanceId,
           count: players,
@@ -1670,6 +1721,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           gameIds: [1]
         })
       });
+      await assertSuccessfulJsonResponse(offerRes);
       const offerData = await offerRes.json();
       if (offerData && offerData.success && Array.isArray(offerData.offers)) {
         setTerminateOffers(offerData.offers);
@@ -1733,6 +1785,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         headers,
         body: JSON.stringify(payload)
       });
+      if (res.status === 401) {
+        expireSession();
+        return;
+      }
+      await assertSuccessfulJsonResponse(res);
       const data = await res.json();
       if (isUnauthorizedResponse(res, data)) {
         expireSession();
@@ -1886,6 +1943,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         body: JSON.stringify(body)
       });
       
+      await assertSuccessfulJsonResponse(response);
       const data = await response.json();
       if (!response.ok || !data.success) {
         throw new Error(data.message || 'Failed to confirm booking.');
@@ -1986,6 +2044,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         body: JSON.stringify(payload)
       });
 
+      if (response.status === 401) {
+        expireSession();
+        return;
+      }
+      await assertSuccessfulJsonResponse(response);
       const data = await response.json();
       if (isUnauthorizedResponse(response, data)) {
         expireSession();

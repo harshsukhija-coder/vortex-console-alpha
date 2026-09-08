@@ -1,4 +1,4 @@
-import { API_BASE_URL } from './api';
+import { API_BASE_URL, assertSuccessfulJsonResponse } from './api';
 
 export interface UpcomingBooking {
   bookingId: number;
@@ -52,6 +52,15 @@ export async function fetchUpcomingSchedule(
   const response = await fetch(`${API_BASE_URL}/api/schedule?${params.toString()}`, {
     headers,
   });
+  if (!response.ok) {
+    const message = (await response.text()).trim();
+    return {
+      success: false,
+      error: message || `Request failed with HTTP ${response.status}.`,
+      httpStatus: response.status,
+    };
+  }
+  await assertSuccessfulJsonResponse(response);
   const data = (await response.json()) as ScheduleResponse;
   return { ...data, httpStatus: response.status };
 }
