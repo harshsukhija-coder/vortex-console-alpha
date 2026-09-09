@@ -110,9 +110,6 @@ function UpcomingScheduleList({
                       <span className="booking-phone">{item.phoneNumber}</span>
                     </div>
                   </div>
-                  <span className={`metric-badge ${imminent ? 'amber' : 'purple'}`} style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                    {imminent ? `${secs <= 300 ? '5' : '10'} min to start` : 'Scheduled'}
-                  </span>
                 </div>
 
                 <div className="tentative-card-body">

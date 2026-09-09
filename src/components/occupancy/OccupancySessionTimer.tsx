@@ -42,24 +42,12 @@ function OccupancySessionTimer({
             : 'var(--accent)';
 
   const label = isPendingStart
-    ? isExpired
+    ? secsLeft <= 0
       ? 'STARTING NOW'
-      : isStart5
-        ? '5 MINS TO START'
-        : isStart10
-          ? '10 MINS TO START'
-          : 'NEXT SESSION STARTS'
+      : 'STARTS IN'
     : isExpired
       ? 'SESSION EXPIRED'
-      : is1Min
-        ? '1 MIN LEFT'
-        : is3Min
-          ? '3 MINS LEFT'
-          : is5Min
-            ? '5 MINS LEFT'
-            : is10Min
-              ? '10 MINS LEFT'
-              : 'TIME REMAINING';
+      : 'TIME REMAINING';
 
   const displayStr = isPendingStart
     ? secsLeft <= 0

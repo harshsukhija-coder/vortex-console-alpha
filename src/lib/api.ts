@@ -4,12 +4,29 @@ export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(
   '',
 );
 
+function getApiErrorMessage(body: string, status: number): string {
+  if (!body) return `Request failed with HTTP ${status}.`;
+
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const errorResponse = parsed as Record<string, unknown>;
+      if (typeof errorResponse.error === 'string') return errorResponse.error;
+      if (typeof errorResponse.message === 'string') return errorResponse.message;
+    }
+  } catch {
+    return body;
+  }
+
+  return body;
+}
+
 export async function assertSuccessfulJsonResponse(
   response: Response,
 ): Promise<void> {
   if (!response.ok) {
-    const message = (await response.text()).trim();
-    throw new Error(message || `Request failed with HTTP ${response.status}.`);
+    const body = (await response.text()).trim();
+    throw new Error(getApiErrorMessage(body, response.status));
   }
 
   const contentType = response.headers.get('content-type');

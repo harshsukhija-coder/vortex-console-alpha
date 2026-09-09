@@ -12,6 +12,10 @@ import {
   type UpcomingBooking,
 } from './lib/schedule';
 import { formatCountdown, secondsUntilIso } from './lib/sessionTiming';
+import {
+  fetchSetupSessionStatus,
+  type SetupSessionStatus,
+} from './lib/setupSession';
 import './App.css';
 
 // Log item interface for platform updates feed
@@ -69,6 +73,7 @@ function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDashboardNavOpen, setIsDashboardNavOpen] = useState(false);
+  const [systemHealth, setSystemHealth] = useState<'checking' | 'healthy' | 'offline'>('checking');
 
   // Dashboard Sub-navigation Tabs State
   const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule'>('bookings');
@@ -132,6 +137,32 @@ function App() {
     }
     localStorage.setItem('vortex_theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkSystemHealth = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/health`, { cache: 'no-store' });
+        const data: unknown = await response.json();
+        const isHealthy = response.ok
+          && typeof data === 'object'
+          && data !== null
+          && (data as Record<string, unknown>).status === 'healthy';
+        if (isMounted) setSystemHealth(isHealthy ? 'healthy' : 'offline');
+      } catch {
+        if (isMounted) setSystemHealth('offline');
+      }
+    };
+
+    checkSystemHealth();
+    const healthTimer = window.setInterval(checkSystemHealth, 30000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(healthTimer);
+    };
+  }, []);
 
   // ----------------------------------------------------
   // Visual Rotator & Live Preview States
@@ -221,6 +252,7 @@ function App() {
   const [occupancyData, setOccupancyData] = useState<SetupInstance[]>([]);
   const [isOccupancyLoading, setIsOccupancyLoading] = useState(false);
   const [occupancyError, setOccupancyError] = useState<string | null>(null);
+  const [setupSessionStatuses, setSetupSessionStatuses] = useState<Record<number, SetupSessionStatus>>({});
 
   // Booking allocation form states
   const [selectedInstanceForBooking, setSelectedInstanceForBooking] = useState<SetupInstance | null>(null);
@@ -231,6 +263,9 @@ function App() {
   const [bookingDate, setBookingDate] = useState('');
   const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
   const [bookingFormError, setBookingFormError] = useState<string | null>(null);
+  const [bookingSessionStatus, setBookingSessionStatus] = useState<SetupSessionStatus | null>(null);
+  const [isCheckingBookingSession, setIsCheckingBookingSession] = useState(false);
+  const [isTerminatingPreviousSession, setIsTerminatingPreviousSession] = useState(false);
 
   // Customer info states for booking flow
   interface CustomerInfo {
@@ -328,7 +363,11 @@ function App() {
     setupInfo: string;
     startLabel?: string;
   }
-  const [activeSessionAlert, setActiveSessionAlert] = useState<SessionWarningAlert | null>(null);
+  const [sessionAlertQueue, setSessionAlertQueue] = useState<SessionWarningAlert[]>([]);
+  const activeSessionAlert = sessionAlertQueue[0] ?? null;
+  const dismissActiveSessionAlert = useCallback(() => {
+    setSessionAlertQueue((alerts) => alerts.slice(1));
+  }, []);
   const dismissedAlertsRef = useRef<Record<string, boolean>>({});
   const startedRefreshRef = useRef<Record<number, boolean>>({});
 
@@ -388,8 +427,9 @@ function App() {
     setAuthToken(null);
     setAuthUser(null);
     setOccupancyData([]);
+    setSetupSessionStatuses({});
     setUpcomingSchedule([]);
-    setActiveSessionAlert(null);
+    setSessionAlertQueue([]);
     setSelectedInstanceForBooking(null);
     setExtendingSessionInstance(null);
     setTerminatingInstance(null);
@@ -547,6 +587,25 @@ function App() {
 
       if (response.ok && data.success) {
         setOccupancyData(data.occupancy);
+        const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+        const sessionStatusResults = await Promise.allSettled(
+          data.occupancy.map(async (instance: SetupInstance) => {
+            const status = await fetchSetupSessionStatus(instance.instanceId, token);
+            return [instance.instanceId, status] as const;
+          })
+        );
+        const statuses = sessionStatusResults.reduce<Record<number, SetupSessionStatus>>((result, statusResult) => {
+          if (statusResult.status === 'fulfilled') {
+            const [instanceId, status] = statusResult.value;
+            result[instanceId] = status;
+          }
+          return result;
+        }, {});
+        setSetupSessionStatuses((currentStatuses) => ({ ...currentStatuses, ...statuses }));
+        const failedStatusChecks = sessionStatusResults.filter((result) => result.status === 'rejected').length;
+        if (failedStatusChecks > 0 && !silent) {
+          setOccupancyError(`Could not verify session termination status for ${failedStatusChecks} station${failedStatusChecks === 1 ? '' : 's'}.`);
+        }
         // Append operational update log
         setLogs((prev) => [
           ...prev,
@@ -845,7 +904,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   // Helper to check 10m, 5m, 3m, 1m, and 0m (expired) warning thresholds
   const checkWarningThresholds = (inst: SetupInstance, secsLeft: number) => {
     if (!inst.currentBooking || isBookingPendingStart(inst.currentBooking)) return;
-    const bookingId = getBookingId(inst.currentBooking);
+    const booking = inst.currentBooking;
+    const bookingId = getBookingId(booking);
     if (bookingId <= 0) return;
 
     const thresholds: Array<{ mins: 10 | 5 | 3 | 1 | 0; minSec: number; maxSec: number }> = [
@@ -862,16 +922,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         if (!dismissedAlertsRef.current[alertKey]) {
           dismissedAlertsRef.current[alertKey] = true;
 
-          setActiveSessionAlert({
+          setSessionAlertQueue((alerts) => [...alerts, {
             kind: 'ending',
             instanceId: inst.instanceId,
             instanceName: inst.instanceName,
             bookingId,
-            phoneNumber: inst.currentBooking.phoneNumber,
+            phoneNumber: booking.phoneNumber,
             minutesThreshold: t.mins,
             secondsLeft: secsLeft,
             setupInfo: `${inst.setup?.consoleType} · ${formatSetupRatesShort(inst.setup)}`
-          });
+          }]);
 
           setLogs((prev) => [
             ...prev,
@@ -879,8 +939,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
               id: `log-alert-${Date.now()}-${t.mins}`,
               type: t.mins === 0 ? 'danger' : 'warning',
               message: t.mins === 0
-                ? `[TIME UP] ${inst.instanceName} session has expired for ${inst.currentBooking?.phoneNumber}. Action required.`
-                : `[TIME WARNING] ${inst.instanceName} has ${t.mins} min remaining for ${inst.currentBooking?.phoneNumber}.`,
+                ? `[TIME UP] ${inst.instanceName} session has expired for ${booking.phoneNumber}. Action required.`
+                : `[TIME WARNING] ${inst.instanceName} has ${t.mins} min remaining for ${booking.phoneNumber}.`,
               timestamp: getTimestamp()
             }
           ]);
@@ -907,7 +967,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         const alertKey = `${bookingId}-start-${t.mins}`;
         if (!dismissedAlertsRef.current[alertKey]) {
           dismissedAlertsRef.current[alertKey] = true;
-          setActiveSessionAlert({
+          setSessionAlertQueue((alerts) => [...alerts, {
             kind: 'starting',
             instanceId: meta.instanceId,
             instanceName: meta.instanceName,
@@ -917,7 +977,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             secondsLeft: secsUntilStart,
             setupInfo: meta.setupInfo,
             startLabel: meta.startLabel,
-          });
+          }]);
           setLogs((prev) => [
             ...prev,
             {
@@ -1267,7 +1327,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   };
 
   // Trigger Booking Allocator Modal overlay
-  const openBookingModal = (instance: SetupInstance) => {
+  const openBookingModal = async (instance: SetupInstance) => {
     setSelectedInstanceForBooking(instance);
     setBookingPhone('');
     setBookingPlayers(2);
@@ -1292,6 +1352,51 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setSelectedGameIds([]);
     setGameSearchQuery('');
     setCopiedPayload(false);
+
+    setBookingSessionStatus(null);
+    setIsCheckingBookingSession(true);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const status = await fetchSetupSessionStatus(instance.instanceId, token);
+      setBookingSessionStatus(status);
+      if (!status.canCreateNewSession) {
+        setBookingFormError('The previous session must be terminated before creating a new booking.');
+      }
+    } catch (error) {
+      setBookingFormError(error instanceof Error ? error.message : 'Could not check the station session status.');
+    } finally {
+      setIsCheckingBookingSession(false);
+    }
+  };
+
+  const handleTerminatePreviousSession = () => {
+    if (!selectedInstanceForBooking || !bookingSessionStatus) return;
+    openPreviousSessionTerminationModal(selectedInstanceForBooking, bookingSessionStatus);
+  };
+
+  const handleTerminateConfirmationPreviousSession = async () => {
+    if (confirmSetupInstanceId === '') return;
+
+    setConfirmError(null);
+    setIsTerminatingPreviousSession(true);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const setupInstanceId = Number(confirmSetupInstanceId);
+      const currentStatus = await fetchSetupSessionStatus(setupInstanceId, token);
+      const instance = occupancyData.find((item) => item.instanceId === setupInstanceId);
+      if (!instance) {
+        throw new Error('The selected station could not be found.');
+      }
+      openPreviousSessionTerminationModal(instance, currentStatus);
+    } catch (error) {
+      setConfirmError(error instanceof Error ? error.message : 'Could not load the previous session details.');
+    } finally {
+      setIsTerminatingPreviousSession(false);
+    }
+  };
+
+  const handleTerminateDashboardSession = (instance: SetupInstance, status: SetupSessionStatus) => {
+    openPreviousSessionTerminationModal(instance, status);
   };
 
   // Toggle game selection
@@ -1626,6 +1731,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     };
 
     try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const sessionStatus = await fetchSetupSessionStatus(selectedInstanceForBooking.instanceId, token);
+      setBookingSessionStatus(sessionStatus);
+      if (!sessionStatus.canCreateNewSession) {
+        throw new Error('The previous session must be terminated before creating this booking.');
+      }
+
       // POST /api/bookings with JWT Auth Token
       const res = await fetch(`${API_BASE_URL}/api/bookings`, {
         method: 'POST',
@@ -1774,6 +1886,42 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
+  function openPreviousSessionTerminationModal(
+    instance: SetupInstance,
+    status: SetupSessionStatus,
+  ) {
+    const previousSession = status.previousSession;
+    if (!previousSession?.actualStartTime) {
+      const message = 'The termination API did not return the previous session start time.';
+      setOccupancyError(message);
+      setBookingFormError(message);
+      setConfirmError(message);
+      return;
+    }
+
+    const amountCharged = Number(
+      previousSession.amountCharged ?? previousSession.originalAmount ?? 0,
+    );
+    const syntheticInstance: SetupInstance = {
+      ...instance,
+      status: 'OCCUPIED',
+      currentBooking: {
+        bookingId: previousSession.bookingId,
+        phoneNumber: previousSession.phoneNumber,
+        playersCount: previousSession.playersCount,
+        status: previousSession.status,
+        startTime: previousSession.actualStartTime,
+        endTime: previousSession.actualEndTime ?? new Date().toISOString(),
+        originalAmount: Number(previousSession.originalAmount ?? amountCharged),
+        amountCharged,
+        timeLeftMinutes: 0,
+        timeLeftFormatted: 'Session ended'
+      }
+    };
+
+    openTerminateModal(syntheticInstance);
+  }
+
   // Handle End Time Adjustment in Modal
   const handleTerminateEndTimeChange = (val: string) => {
     setTerminateEndTime(val);
@@ -1789,7 +1937,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     updateTerminationCalculations(terminateEndTime, nextSelected, terminateOffers);
   };
 
-  // Submit Final Session Termination (POST /api/setups/:setupId/end-session)
+  // Submit Final Session Termination.
   const handleFinalizeTerminationSubmit = async (e?: React.FormEvent, customInst?: SetupInstance) => {
     if (e) {
       e.preventDefault();
@@ -1803,25 +1951,29 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setTerminateError(null);
     setIsTerminating(true);
 
-    const payload = {
-      endTime: terminateEndTime ? new Date(terminateEndTime).toISOString() : new Date().toISOString(),
-      cashAmount: Number(terminateCashAmount) || 0,
-      upiAmount: Number(terminateUpiAmount) || 0,
-      appliedOfferIds: terminateSelectedOfferIds
-    };
-
     try {
       const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const actualStartTime = new Date(targetInst.currentBooking.startTime);
+      const actualEndTime = terminateEndTime ? new Date(terminateEndTime) : new Date();
+      if (Number.isNaN(actualStartTime.getTime()) || Number.isNaN(actualEndTime.getTime())) {
+        throw new Error('The session start or end time is invalid.');
+      }
+
       const headers: HeadersInit = {
         'Content-Type': 'application/json'
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      // Call POST /api/setups/:setupId/end-session
-      const res = await fetch(`${API_BASE_URL}/api/setups/${setupId}/end-session`, {
+      const res = await fetch(`${API_BASE_URL}/api/setup-instances/${setupId}/terminate-session`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          actualStartTime: actualStartTime.toISOString(),
+          actualEndTime: actualEndTime.toISOString(),
+          finalAmountCharged: Number(terminateFinalAmount) || 0,
+          cashAmount: Number(terminateCashAmount) || 0,
+          upiAmount: Number(terminateUpiAmount) || 0
+        })
       });
       if (res.status === 401) {
         expireSession();
@@ -1861,6 +2013,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         fetchOccupancyData();
         fetchScheduleData(true);
         fetchTentativeBookings(tentativeDate);
+        if (selectedInstanceForBooking?.instanceId === targetInst.instanceId) {
+          fetchSetupSessionStatus(targetInst.instanceId, token)
+            .then((status) => {
+              setBookingSessionStatus(status);
+              setBookingFormError(null);
+            })
+            .catch(() => {
+              setBookingFormError('Session ended, but the station status could not be refreshed.');
+            });
+        }
+        if (confirmSetupInstanceId === targetInst.instanceId) {
+          setConfirmError(null);
+        }
         if (activeDashboardTab === 'sessions') {
           fetchPastSessions(pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter);
         }
@@ -1961,6 +2126,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const body: any = {};
       if (confirmSetupInstanceId !== '') {
         body.setupInstanceId = Number(confirmSetupInstanceId);
+        const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+        const sessionStatus = await fetchSetupSessionStatus(body.setupInstanceId, token);
+        if (!sessionStatus.canCreateNewSession) {
+          throw new Error('The previous session must be terminated before confirming this booking.');
+        }
       }
       body.cashAmount = Number(confirmCashAmount);
       body.upiAmount = Number(confirmUpiAmount);
@@ -2173,7 +2343,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
         // Reset extend form modal state
         setExtendingSessionInstance(null);
-        setActiveSessionAlert(null);
+        dismissActiveSessionAlert();
         setExtensionMinutes(30);
         setExtensionCashAmount('');
         setExtensionUpiAmount('');
@@ -2291,10 +2461,17 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             <span className="logo-text">VORTEX <span className="logo-tag">HUB</span></span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div className="system-status">
+          <div className="header-actions">
+            <div className="header-utilities">
+            <div
+              className={`system-status ${systemHealth}`}
+              title={systemHealth === 'healthy' ? 'Backend health check passed' : systemHealth === 'offline' ? 'Backend health check failed' : 'Checking backend health'}
+            >
               <span className="status-dot"></span>
-              <span>SYSTEM ACTIVE</span>
+              <span className="system-status-label">
+                <span className="system-status-prefix">SYSTEM </span>
+                {systemHealth === 'healthy' ? 'ACTIVE' : systemHealth === 'offline' ? 'OFFLINE' : 'CHECKING'}
+              </span>
             </div>
 
             <button 
@@ -2321,7 +2498,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                 </svg>
               )}
             </button>
-          </div>
+            </div>
 
           {/* Desktop Navigation */}
           <nav className="nav-desktop">
@@ -2365,6 +2542,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
               </svg>
             )}
           </button>
+          </div>
 
           {/* Mobile Overlay Menu */}
           <div className={`nav-mobile-menu ${isMenuOpen ? 'open' : ''}`} id="mobile-navigation">
@@ -2786,12 +2964,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             {occupancyData.map((inst) => {
                               const pendingStart = Boolean(inst.currentBooking && isBookingPendingStart(inst.currentBooking));
                               const currentBookingId = inst.currentBooking ? getBookingId(inst.currentBooking) : 0;
+                              const sessionStatus = setupSessionStatuses[inst.instanceId];
+                              const sessionIsOngoing = Boolean(
+                                inst.currentBooking
+                                && (pendingStart || calculateBookingSecondsRemaining(inst.currentBooking) > 0)
+                              );
+                              const requiresTermination = sessionStatus?.requiresTermination === true && !sessionIsOngoing;
                               const nextUpcoming = getNextUpcomingForInstance(
                                 upcomingSchedule,
                                 inst.instanceId,
                                 currentBookingId || undefined,
                               );
-                              const cardStatus = pendingStart ? 'scheduled' : inst.status.toLowerCase();
+                              const cardStatus = requiresTermination
+                                ? 'termination-required'
+                                : (pendingStart ? 'scheduled' : inst.status.toLowerCase());
                               return (
                               <div 
                                 key={inst.instanceId} 
@@ -2809,6 +2995,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   {/* Simple Status badge */}
                                   <span 
                                     className={`metric-badge ${
+                                      requiresTermination ? 'red' :
                                       pendingStart ? 'purple' :
                                       inst.status === 'AVAILABLE' ? 'green' : 
                                       inst.status === 'OCCUPIED' ? 'blue' : 'amber'
@@ -2819,12 +3006,21 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       height: 6, 
                                       borderRadius: '50%', 
                                       backgroundColor: 
+                                        requiresTermination ? 'var(--danger)' :
                                         pendingStart ? '#a855f7' :
                                         inst.status === 'AVAILABLE' ? 'var(--success)' : 
                                         inst.status === 'OCCUPIED' ? 'var(--accent)' : 'var(--warning)', 
                                       display: 'inline-block' 
                                     }}></span>
-                                    {pendingStart ? 'Scheduled' : inst.status === 'OCCUPIED' ? 'Occupied' : inst.status === 'AVAILABLE' ? 'Available' : 'Tentative'}
+                                    {requiresTermination
+                                      ? 'Termination Required'
+                                      : pendingStart
+                                        ? 'Scheduled'
+                                        : inst.status === 'OCCUPIED'
+                                          ? 'Occupied'
+                                          : inst.status === 'AVAILABLE'
+                                            ? 'Available'
+                                            : 'Tentative'}
                                   </span>
                                 </div>
 
@@ -2953,14 +3149,26 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   </div>
                                 ) : (
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    <div style={{ height: '90px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', background: 'rgba(34,197,94,0.04)', border: '1px dashed rgba(34,197,94,0.3)' }}>
-                                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
-                                        <circle cx="12" cy="12" r="10"/>
-                                        <polyline points="12 8 12 12 14 14"/>
-                                      </svg>
-                                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--success)' }}>Available</span>
-                                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Ready for allocation</span>
-                                    </div>
+                                    {requiresTermination ? (
+                                      <div className="station-termination-warning">
+                                        <strong>Previous session was not terminated gracefully</strong>
+                                        <span>
+                                          Booking #{sessionStatus.previousSession?.bookingId ?? 'unknown'}
+                                          {sessionStatus.previousSession?.phoneNumber
+                                            ? ` · ${sessionStatus.previousSession.phoneNumber}`
+                                            : ''}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div style={{ height: '90px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', background: 'rgba(34,197,94,0.04)', border: '1px dashed rgba(34,197,94,0.3)' }}>
+                                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+                                          <circle cx="12" cy="12" r="10"/>
+                                          <polyline points="12 8 12 12 14 14"/>
+                                        </svg>
+                                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--success)' }}>Available</span>
+                                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Ready for allocation</span>
+                                      </div>
+                                    )}
                                     {nextUpcoming && (
                                       <div className="next-session-banner">
                                         <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -2976,9 +3184,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                         </div>
                                       </div>
                                     )}
-                                    <button className="btn-card-action primary" style={{ width: '100%' }} onClick={() => openBookingModal(inst)}>
-                                      + Book Station
-                                    </button>
+                                    {requiresTermination ? (
+                                      <button
+                                        className="btn-card-action"
+                                        style={{ width: '100%', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                                        onClick={() => handleTerminateDashboardSession(inst, sessionStatus)}
+                                      >
+                                        Review and terminate session
+                                      </button>
+                                    ) : (
+                                      <button className="btn-card-action primary" style={{ width: '100%' }} onClick={() => openBookingModal(inst)}>
+                                        + Book Station
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -3032,11 +3250,39 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 </button>
                               </div>
 
+                              {isCheckingBookingSession && (
+                                <div className="session-guard-card">
+                                  <span>Checking whether this station can start a new session...</span>
+                                </div>
+                              )}
+
+                              {bookingSessionStatus?.requiresTermination && (
+                                <div className="session-guard-card blocked" role="alert">
+                                  <div>
+                                    <strong>Previous session must be terminated</strong>
+                                    <span>
+                                      Booking #{bookingSessionStatus.previousSession?.bookingId ?? 'unknown'}
+                                      {bookingSessionStatus.previousSession?.phoneNumber
+                                        ? ` for ${bookingSessionStatus.previousSession.phoneNumber}`
+                                        : ''} is still marked as active.
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn-card-action"
+                                    onClick={handleTerminatePreviousSession}
+                                    disabled={isTerminatingPreviousSession}
+                                  >
+                                    {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                  </button>
+                                </div>
+                              )}
+
                               {/* ── STEP 1: Phone Number Lookup ── */}
                               {bookingStep === 1 && (
                                 <div>
                                   <div className="modal-body">
-                                    {bookingFormError && (
+                                    {bookingFormError && !bookingSessionStatus?.requiresTermination && (
                                       <div className="form-error-banner">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                           <circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>
@@ -3084,7 +3330,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     <button
                                       type="button"
                                       className="btn-card-action primary"
-                                      disabled={isLookingUpCustomer || bookingPhone.trim().length < 10}
+                                      disabled={isLookingUpCustomer || isCheckingBookingSession || bookingSessionStatus?.canCreateNewSession !== true || bookingPhone.trim().length < 10}
                                       onClick={handleCustomerPhoneLookup}
                                     >
                                       {isLookingUpCustomer ? (
@@ -3471,6 +3717,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                             <circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>
                                           </svg>
                                           <span>{bookingFormError}</span>
+                                          {bookingSessionStatus?.requiresTermination && (
+                                            <button
+                                              type="button"
+                                              className="btn-card-action"
+                                              onClick={handleTerminatePreviousSession}
+                                              disabled={isTerminatingPreviousSession}
+                                            >
+                                              {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                            </button>
+                                          )}
                                         </div>
                                       )}
 
@@ -3995,6 +4251,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                             <circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>
                                           </svg>
                                           <span>{bookingFormError}</span>
+                                          {bookingSessionStatus?.requiresTermination && (
+                                            <button
+                                              type="button"
+                                              className="btn-card-action"
+                                              onClick={handleTerminatePreviousSession}
+                                              disabled={isTerminatingPreviousSession}
+                                            >
+                                              {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                            </button>
+                                          )}
                                         </div>
                                       )}
 
@@ -4961,6 +5227,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 <line x1="9" y1="9" x2="15" y2="15"></line>
                               </svg>
                               <span>{confirmError}</span>
+                              {confirmError.toLowerCase().includes('previous session') && confirmSetupInstanceId !== '' && (
+                                <button
+                                  type="button"
+                                  className="btn-card-action"
+                                  onClick={handleTerminateConfirmationPreviousSession}
+                                  disabled={isTerminatingPreviousSession}
+                                >
+                                  {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                </button>
+                              )}
                             </div>
                           )}
 
@@ -5976,7 +6252,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                 {/* Session Warning Alert Modal (start 10m/5m, end 10m/5m/3m/1m/0m) */}
                 {activeSessionAlert && (
-                  <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setActiveSessionAlert(null)}>
+                  <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={dismissActiveSessionAlert}>
                     <div 
                       className="modal-card" 
                       style={{ 
@@ -6001,10 +6277,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             </h3>
                             <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
                               {activeSessionAlert.kind === 'starting' ? 'Upcoming session notification' : 'Console Station Alert · Action Required'}
+                              {sessionAlertQueue.length > 1 ? ` · 1 of ${sessionAlertQueue.length} alerts` : ''}
                             </p>
                           </div>
                         </div>
-                        <button className="modal-close-btn" onClick={() => setActiveSessionAlert(null)}>
+                        <button className="modal-close-btn" onClick={dismissActiveSessionAlert}>
                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -6111,7 +6388,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <button 
                           type="button" 
                           className="btn-card-action"
-                          onClick={() => setActiveSessionAlert(null)}
+                          onClick={dismissActiveSessionAlert}
                         >
                           Acknowledge & Dismiss
                         </button>
@@ -6122,7 +6399,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           style={{ background: 'var(--error)', color: 'white', borderColor: 'var(--error)' }}
                           onClick={() => {
                             const matchingInst = occupancyData.find((i) => i.instanceId === activeSessionAlert.instanceId);
-                            setActiveSessionAlert(null);
+                            dismissActiveSessionAlert();
                             if (matchingInst) openTerminateModal(matchingInst);
                           }}
                         >
