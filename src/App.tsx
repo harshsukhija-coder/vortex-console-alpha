@@ -67,6 +67,8 @@ interface SetupInstance {
 function App() {
   // Mobile navbar toggle state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDashboardNavOpen, setIsDashboardNavOpen] = useState(false);
 
   // Dashboard Sub-navigation Tabs State
   const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule'>('bookings');
@@ -1407,15 +1409,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const selectedGamesObjects = availableGames.filter((g) => effectiveGameIds.includes(g.id));
 
     setIsLoadingReview(true);
-    const simplePayload = {
-      setupInstanceId: selectedInstanceForBooking.instanceId,
-      count: Number(bookingPlayers),
-      date: bookingDate,
-      startTime: bookingTime,
-      noOfHours: Number(bookingHours),
-      gameIds: effectiveGameIds
-    };
-
     const fullEvaluationPayload = {
       setupInstanceId: selectedInstanceForBooking.instanceId,
       setupName: selectedInstanceForBooking.instanceName,
@@ -1442,8 +1435,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     };
 
     try {
-      // Fetch offer eligibility first from /api/offers/evaluate
-      const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate`, {
+      // Fetch offer eligibility using the actual booking payload.
+      const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate/actual`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1454,39 +1447,53 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       await assertSuccessfulJsonResponse(offerRes);
       const offerData = await offerRes.json();
 
-      let initialSelectedOfferIds: number[] = [];
       if (offerData.success) {
         setBookingOffers(offerData.offers || []);
         const applicable = offerData.applicableOffers || (offerData.offers || []).filter((o: any) => o.eligible);
         const ineligible = offerData.ineligibleOffers || (offerData.offers || []).filter((o: any) => !o.eligible);
         setApplicableOffers(applicable);
         setIneligibleOffers(ineligible);
-        if (applicable.length > 0) {
-          initialSelectedOfferIds = [applicable[0].id];
-        }
       } else {
         setBookingOffers([]);
         setApplicableOffers([]);
         setIneligibleOffers([]);
       }
-      setSelectedOfferIds(initialSelectedOfferIds);
+      setSelectedOfferIds([]);
 
-      // Fetch review summary with initial offer selection
-      const reviewRes = await fetch(`${API_BASE_URL}/api/bookings/review`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ ...simplePayload, appliedOfferIds: initialSelectedOfferIds })
+      const playersCount = Number(bookingPlayers);
+      const durationHours = Number(bookingHours);
+      const ratePerPersonPerHour = getSetupRateForPlayers(selectedInstanceForBooking.setup, playersCount);
+      const originalAmount = ratePerPersonPerHour * playersCount * durationHours;
+      const formattedDate = new Date(`${bookingDate}T00:00:00`).toLocaleDateString('en-GB', {
+        weekday: 'long',
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
       });
-      await assertSuccessfulJsonResponse(reviewRes);
-      const reviewData = await reviewRes.json();
-      if (!reviewRes.ok || !reviewData.success) {
-        throw new Error(reviewData.error || reviewData.message || 'Failed to load booking review.');
-      }
 
-      setBookingReview(reviewData.summary);
+      setBookingReview({
+        setup: {
+          setupInstanceId: selectedInstanceForBooking.instanceId,
+          setupConfigurationId: selectedInstanceForBooking.setup.id,
+          instanceName: selectedInstanceForBooking.instanceName,
+          configurationName: selectedInstanceForBooking.setup.name,
+          consoleType: selectedInstanceForBooking.setup.consoleType
+        },
+        zoneName: selectedInstanceForBooking.instanceName,
+        date: formattedDate,
+        dateValue: bookingDate,
+        startTime: bookingTime,
+        slots: [`${bookingTime} - ${calculateSlotEndTime(bookingTime, durationHours)}`],
+        slotsFormatted: `${bookingTime} - ${calculateSlotEndTime(bookingTime, durationHours)}`,
+        playersCount,
+        durationHours,
+        games: selectedGamesObjects,
+        selectedOffers: [],
+        priceCalculationText: `₹${ratePerPersonPerHour} × ${playersCount} players × ${durationHours} ${durationHours === 1 ? 'hour' : 'hours'} = ₹${originalAmount}`,
+        originalAmount,
+        discountApplied: 0,
+        totalAmount: originalAmount
+      });
       setBookingStep(6);
     } catch (err: any) {
       setBookingFormError(err.message || 'Could not load booking preview. Check backend connection.');
@@ -1495,11 +1502,15 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  // Step 6: Re-fetch review with selected offers applied
-  const handleApplyOffers = async () => {
+  const handleOpenFinalReview = async () => {
     if (!selectedInstanceForBooking || !bookingReview) return;
+
+    setBookingFormError(null);
     setIsLoadingReview(true);
-    const effectiveGameIds = selectedGameIds.length > 0 ? selectedGameIds : (availableGames.length > 0 ? [availableGames[0].id] : [1]);
+
+    const effectiveGameIds = selectedGameIds.length > 0
+      ? selectedGameIds
+      : (availableGames.length > 0 ? [availableGames[0].id] : [1]);
     const payload = {
       setupInstanceId: selectedInstanceForBooking.instanceId,
       count: Number(bookingPlayers),
@@ -1507,27 +1518,54 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       startTime: bookingTime,
       noOfHours: Number(bookingHours),
       gameIds: effectiveGameIds,
-      appliedOfferIds: selectedOfferIds
+      ...(selectedOfferIds.length > 0 ? { appliedOfferIds: selectedOfferIds } : {})
     };
+
     try {
       const reviewRes = await fetch(`${API_BASE_URL}/api/bookings/review`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
+          'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify(payload)
       });
-      await assertSuccessfulJsonResponse(reviewRes);
       const reviewData = await reviewRes.json();
-      if (reviewRes.ok && reviewData.success) {
-        setBookingReview(reviewData.summary);
+
+      if (!reviewRes.ok || !reviewData.success) {
+        throw new Error(reviewData.error || reviewData.message || 'Failed to review booking.');
       }
-    } catch { /* silent */ }
-    finally { setIsLoadingReview(false); }
+
+      const selectedOffers = applicableOffers.filter((offer) => selectedOfferIds.includes(offer.id));
+      const localDiscount = selectedOffers.reduce((total, offer) => total + Number(offer.discount || 0), 0);
+
+      setBookingReview((currentReview: any) => {
+        const reviewedOriginalAmount = reviewData.summary.originalAmount ?? currentReview.originalAmount;
+        const reviewedDiscount = reviewData.summary.discountApplied ?? localDiscount;
+
+        return {
+          ...currentReview,
+          ...reviewData.summary,
+          zoneName: reviewData.summary.setup?.instanceName ?? currentReview.zoneName,
+          slotsFormatted: Array.isArray(reviewData.summary.slots)
+            ? reviewData.summary.slots.join(', ')
+            : (reviewData.summary.slotsFormatted ?? currentReview.slotsFormatted),
+          selectedOffers: reviewData.summary.selectedOffers ?? selectedOffers,
+          priceCalculationText: reviewData.summary.priceCalculationText ?? currentReview.priceCalculationText,
+          originalAmount: reviewedOriginalAmount,
+          discountApplied: reviewedDiscount,
+          totalAmount: reviewData.summary.totalAmount ?? Math.max(0, reviewedOriginalAmount - reviewedDiscount)
+        };
+      });
+      setBookingStep(7);
+    } catch (error) {
+      setBookingFormError(error instanceof Error ? error.message : 'Failed to review booking.');
+    } finally {
+      setIsLoadingReview(false);
+    }
   };
 
-  // Step 6: Lock slot + Create tentative booking
+  // Step 7: Lock slot and create the booking.
   const handleCreateBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedInstanceForBooking) return;
@@ -1579,7 +1617,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         calculationFormula: slotPricing?.calculationFormula ?? `₹${getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers))}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours}`
       },
       offers: {
-        appliedOfferIds: selectedOfferIds,
+        ...(selectedOfferIds.length > 0 ? { appliedOfferIds: selectedOfferIds } : {}),
         appliedOffers: selectedOffersObjects,
         originalAmount: bookingReview?.originalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
         discountApplied: bookingReview?.discountApplied || 0,
@@ -2216,6 +2254,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   // Navigation utility
   const navigateTo = (hash: string) => {
+    setIsMenuOpen(false);
+    setIsDashboardNavOpen(false);
     window.location.hash = hash;
   };
 
@@ -2307,8 +2347,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           {/* Mobile Navigation toggle */}
           <button 
             className="nav-mobile-toggle"
-            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            onClick={() => setIsMenuOpen((open) => !open)}
             aria-label="Toggle navigation menu"
+            aria-expanded={isMenuOpen}
+            aria-controls="mobile-navigation"
           >
             {isMenuOpen ? (
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2325,7 +2367,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           </button>
 
           {/* Mobile Overlay Menu */}
-          <div className={`nav-mobile-menu ${isMenuOpen ? 'open' : ''}`}>
+          <div className={`nav-mobile-menu ${isMenuOpen ? 'open' : ''}`} id="mobile-navigation">
             <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>HOME</a>
             {authToken ? (
               <>
@@ -2574,18 +2616,45 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           {currentHash === '#/dashboard' && authToken && (
             <div className="dashboard-layout">
               {/* Dashboard Sidebar Navigation */}
-              <aside className="dashboard-sidebar">
-                <div className="sidebar-brand">
-                  <span className="sidebar-brand-name">VORTEX CONSOLE</span>
-                  <span className="sidebar-brand-desc">Lounge Operations Board</span>
+              <aside className={`dashboard-sidebar ${isSidebarCollapsed ? 'collapsed' : ''} ${isDashboardNavOpen ? 'mobile-open' : ''}`}>
+                <div className="sidebar-header">
+                  <div className="sidebar-brand">
+                    <span className="sidebar-brand-name">VORTEX CONSOLE</span>
+                    <span className="sidebar-brand-desc">Lounge Operations Board</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="sidebar-collapse-btn"
+                    onClick={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+                    aria-label={isSidebarCollapsed ? 'Expand dashboard navigation' : 'Collapse dashboard navigation'}
+                    title={isSidebarCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points={isSidebarCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'}></polyline>
+                    </svg>
+                  </button>
                 </div>
+
+                <button
+                  type="button"
+                  className="sidebar-mobile-toggle"
+                  onClick={() => setIsDashboardNavOpen((open) => !open)}
+                  aria-expanded={isDashboardNavOpen}
+                  aria-controls="dashboard-navigation"
+                >
+                  <span>Operations Menu</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points={isDashboardNavOpen ? '18 15 12 9 6 15' : '6 9 12 15 18 9'}></polyline>
+                  </svg>
+                </button>
 
                 <div className="sidebar-menu-wrapper">
                   <span className="sidebar-section-title">Operations Menu</span>
-                  <nav className="sidebar-menu">
+                  <nav className="sidebar-menu" id="dashboard-navigation">
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'bookings' ? 'active' : ''}`}
-                      onClick={() => setActiveDashboardTab('bookings')}
+                      onClick={() => { setActiveDashboardTab('bookings'); setIsDashboardNavOpen(false); }}
+                      title="Allocations & Bookings"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="3" width="7" height="9"></rect>
@@ -2593,12 +2662,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <rect x="14" y="12" width="7" height="9"></rect>
                         <rect x="3" y="16" width="7" height="5"></rect>
                       </svg>
-                      Allocations & Bookings
+                      <span className="sidebar-btn-label">Allocations & Bookings</span>
                     </button>
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'schedule' ? 'active' : ''}`}
-                      onClick={() => setActiveDashboardTab('schedule')}
+                      onClick={() => { setActiveDashboardTab('schedule'); setIsDashboardNavOpen(false); }}
+                      title="Upcoming Schedule"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -2607,12 +2677,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                         <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"></path>
                       </svg>
-                      Upcoming Schedule
+                      <span className="sidebar-btn-label">Upcoming Schedule</span>
                     </button>
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'tentative' ? 'active' : ''}`}
-                      onClick={() => setActiveDashboardTab('tentative')}
+                      onClick={() => { setActiveDashboardTab('tentative'); setIsDashboardNavOpen(false); }}
+                      title="Tentative Ledger"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -2620,28 +2691,30 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <line x1="8" y1="2" x2="8" y2="6"></line>
                         <line x1="3" y1="10" x2="21" y2="10"></line>
                       </svg>
-                      Tentative Ledger
+                      <span className="sidebar-btn-label">Tentative Ledger</span>
                     </button>
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'sessions' ? 'active' : ''}`}
-                      onClick={() => setActiveDashboardTab('sessions')}
+                      onClick={() => { setActiveDashboardTab('sessions'); setIsDashboardNavOpen(false); }}
+                      title="Past Sessions & Revenue"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="10"></circle>
                         <polyline points="12 6 12 12 16 14"></polyline>
                       </svg>
-                      Past Sessions & Revenue
+                      <span className="sidebar-btn-label">Past Sessions & Revenue</span>
                     </button>
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'stats' ? 'active' : ''}`}
-                      onClick={() => setActiveDashboardTab('stats')}
+                      onClick={() => { setActiveDashboardTab('stats'); setIsDashboardNavOpen(false); }}
+                      title="Performance & Stats"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
                       </svg>
-                      Performance & Stats
+                      <span className="sidebar-btn-label">Performance & Stats</span>
                     </button>
                   </nav>
                 </div>
@@ -2916,8 +2989,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                         {/* Booking Allocation Modal Overlay — 6-Step Customer-First Wizard */}
                         {selectedInstanceForBooking && (
-                          <div className="modal-overlay" onClick={() => setSelectedInstanceForBooking(null)}>
-                            <div className="modal-card" style={{ maxWidth: '580px' }} onClick={(e) => e.stopPropagation()}>
+                          <div className="modal-overlay">
+                            <div className="modal-card" style={{ maxWidth: '580px' }}>
 
                               {/* Modal Header */}
                               <div className="modal-header">
@@ -3683,13 +3756,44 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 );
                               })()}
 
-                              {/* ── STEP 6: Review & Apply Offers (Evaluated via /api/offers/evaluate) ── */}
+                              {/* ── STEP 6: Select Offers (Evaluated via /api/offers/evaluate/actual) ── */}
                               {bookingStep === 6 && bookingReview && (() => {
                                 const selectedGamesObjects = availableGames.filter((g) => selectedGameIds.includes(g.id));
 
                                 return (
                                   <div>
                                     <div className="modal-body">
+                                      {bookingFormError && (
+                                        <div className="booking-review-error" role="alert">
+                                          <div className="booking-review-error-icon">
+                                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                                              <circle cx="12" cy="12" r="9"></circle>
+                                              <path d="M12 7v6"></path>
+                                              <circle cx="12" cy="17" r="0.75" fill="currentColor" stroke="none"></circle>
+                                            </svg>
+                                          </div>
+                                          <div className="booking-review-error-content">
+                                            <strong>
+                                              {bookingFormError.toLowerCase().includes('overlap')
+                                                ? 'Time slot unavailable'
+                                                : 'Unable to review booking'}
+                                            </strong>
+                                            <span>{bookingFormError}</span>
+                                            {bookingFormError.toLowerCase().includes('overlap') && (
+                                              <button
+                                                type="button"
+                                                className="booking-review-error-action"
+                                                onClick={() => {
+                                                  setBookingFormError(null);
+                                                  setBookingStep(5);
+                                                }}
+                                              >
+                                                Choose another time
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
                                       {/* Booking Summary */}
                                       <div style={{ background: 'var(--bg-card-hover)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
                                         <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-heading)', marginBottom: '8px' }}>Booking Summary</div>
@@ -3819,10 +3923,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     </div>
                                     <div className="modal-footer">
                                       <button type="button" className="btn-card-action" onClick={() => { setBookingStep(5); setBookingFormError(null); }}>← Back</button>
-                                      <button type="button" className="btn-card-action" onClick={handleApplyOffers} disabled={isLoadingReview}>
-                                        {isLoadingReview ? 'Applying...' : 'Apply Offers'}
+                                      <button type="button" className="btn-card-action primary" onClick={handleOpenFinalReview} disabled={isLoadingReview}>
+                                        {isLoadingReview ? 'Reviewing...' : 'Review Booking →'}
                                       </button>
-                                      <button type="button" className="btn-card-action primary" onClick={() => setBookingStep(7)}>Review Booking →</button>
                                     </div>
                                   </div>
                                 );
