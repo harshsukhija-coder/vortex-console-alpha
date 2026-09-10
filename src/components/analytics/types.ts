@@ -31,6 +31,13 @@ export interface AgeGroupStat {
   playerVisits: number;
 }
 
+export interface PlayerCountBreakdownStat {
+  label: 'SINGLE' | 'DOUBLE' | 'TRIPLE' | 'FOUR' | 'FIVE_OR_MORE' | string;
+  playersCount: number;
+  sessions: number;
+  playerVisits: number;
+}
+
 export interface ConsoleInstanceStat {
   setupInstanceId: number;
   instanceName: string;
@@ -110,6 +117,7 @@ export interface SessionAnalytics {
   generatedAt: string;
   range: AnalyticsRange;
   overview: AnalyticsOverview;
+  playerCountBreakdown: PlayerCountBreakdownStat[];
   ageGroups: AgeGroupStat[];
   consoleInstances: ConsoleInstanceStat[];
   games: GameStat[];
@@ -131,6 +139,7 @@ export interface SessionAnalyticsPayload {
   generatedAt?: string;
   range: AnalyticsRange;
   overview: Partial<AnalyticsOverview>;
+  playerCountBreakdown?: PlayerCountBreakdownStat[];
   ageGroups?: AgeGroupStat[];
   consoleInstances?: ConsoleInstanceStat[];
   games?: GameStat[];

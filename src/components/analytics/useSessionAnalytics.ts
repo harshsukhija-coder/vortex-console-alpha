@@ -72,6 +72,7 @@ export function useSessionAnalytics({
             completionRatePercent: 0,
             ...result.overview,
           },
+          playerCountBreakdown: result.playerCountBreakdown ?? [],
           ageGroups: result.ageGroups ?? [],
           consoleInstances: result.consoleInstances ?? [],
           games: result.games ?? [],

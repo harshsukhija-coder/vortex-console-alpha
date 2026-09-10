@@ -12,16 +12,23 @@ import {
 } from 'recharts';
 import ChartDownloadButton from './ChartDownloadButton';
 import SectionDownloadButton from './SectionDownloadButton';
-import { formatAgeGroup, formatAnalyticsDate, formatCurrency } from './formatters';
+import {
+  formatAgeGroup,
+  formatAnalyticsDate,
+  formatCurrency,
+  formatPlayerCountLabel,
+} from './formatters';
 import type {
   AgeGroupStat,
   ConfigurationStat,
   DailyTrendStat,
   PeakStartHourStat,
+  PlayerCountBreakdownStat,
 } from './types';
 
 interface AnalyticsChartsProps {
   dateRange: string;
+  playerCountBreakdown: PlayerCountBreakdownStat[];
   dailyTrend: DailyTrendStat[];
   configurationBreakdown: ConfigurationStat[];
   ageGroups: AgeGroupStat[];
@@ -37,6 +44,7 @@ const tooltipStyle = {
 
 export default function AnalyticsCharts({
   dateRange,
+  playerCountBreakdown,
   dailyTrend,
   configurationBreakdown,
   ageGroups,
@@ -44,6 +52,7 @@ export default function AnalyticsCharts({
 }: AnalyticsChartsProps) {
   const visibleAgeGroups = ageGroups.filter((group) => group.playerVisits > 0);
   const dailyChartRef = useRef<HTMLElement>(null);
+  const playerCountChartRef = useRef<HTMLElement>(null);
   const ageChartRef = useRef<HTMLElement>(null);
   const setupChartRef = useRef<HTMLElement>(null);
   const peakChartRef = useRef<HTMLElement>(null);
@@ -75,6 +84,30 @@ export default function AnalyticsCharts({
               <Area type="monotone" dataKey="revenue" stroke="var(--analytics-violet)" strokeWidth={3} fill="url(#revenueGradient)" activeDot={{ r: 5 }} />
             </AreaChart>
           </ResponsiveContainer>
+        </div>
+      </article>
+
+      <article className="analytics-panel analytics-chart-wide" ref={playerCountChartRef}>
+        <header>
+          <div><span className="analytics-eyebrow">Party composition</span><h3>Sessions by player count</h3><span className="analytics-chart-period">{dateRange}</span></div>
+          <div className="analytics-chart-actions">
+            <SectionDownloadButton rows={playerCountBreakdown} sheetName="Player Count Breakdown" filename="player-count-breakdown" />
+            <ChartDownloadButton targetRef={playerCountChartRef} filename="sessions-by-player-count" />
+          </div>
+        </header>
+        <div className="analytics-chart">
+          {playerCountBreakdown.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={playerCountBreakdown}>
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="label" tickFormatter={formatPlayerCountLabel} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={tooltipStyle} labelFormatter={(label) => formatPlayerCountLabel(String(label))} />
+                <Bar dataKey="sessions" name="Sessions" fill="var(--analytics-violet)" radius={[5, 5, 0, 0]} />
+                <Bar dataKey="playerVisits" name="Player visits" fill="var(--analytics-green)" radius={[5, 5, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <div className="analytics-empty">No player-count data for this range</div>}
         </div>
       </article>
 

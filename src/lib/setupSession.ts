@@ -5,6 +5,8 @@ export interface PreviousSession {
   status: string;
   phoneNumber: string;
   playersCount: number;
+  scheduledStartTime?: string | null;
+  scheduledEndTime?: string | null;
   actualStartTime?: string | null;
   actualEndTime: string | null;
   originalAmount?: number;

@@ -31,6 +31,17 @@ export const formatAgeGroup = (value: string): string => {
   return value;
 };
 
+export const formatPlayerCountLabel = (value: string): string => {
+  const labels: Record<string, string> = {
+    SINGLE: '1 player',
+    DOUBLE: '2 players',
+    TRIPLE: '3 players',
+    FOUR: '4 players',
+    FIVE_OR_MORE: '5+ players',
+  };
+  return labels[value] ?? value.replaceAll('_', ' ').toLowerCase();
+};
+
 export const formatAnalyticsRange = (
   start: string,
   endExclusive: string,

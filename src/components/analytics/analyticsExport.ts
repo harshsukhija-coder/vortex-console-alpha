@@ -30,6 +30,7 @@ function getDatasets(analytics: SessionAnalytics): ExportDataset[] {
   return [
     { name: 'Overview', rows: [flattenObject(analytics.overview)] },
     { name: 'Range', rows: [flattenObject({ generatedAt: analytics.generatedAt, ...analytics.range })] },
+    { name: 'Player Count', rows: toRows(analytics.playerCountBreakdown) },
     { name: 'Daily Trend', rows: toRows(analytics.dailyTrend) },
     { name: 'Console Instances', rows: toRows(analytics.consoleInstances) },
     { name: 'Configurations', rows: toRows(analytics.configurationBreakdown) },

@@ -124,6 +124,7 @@ export default function PerformanceAnalytics({ token }: PerformanceAnalyticsProp
           <AnalyticsOverview overview={analytics.overview} />
           <AnalyticsCharts
             dateRange={formatAnalyticsRange(analytics.range.start, analytics.range.endExclusive)}
+            playerCountBreakdown={analytics.playerCountBreakdown}
             dailyTrend={analytics.dailyTrend}
             configurationBreakdown={analytics.configurationBreakdown}
             ageGroups={analytics.ageGroups}

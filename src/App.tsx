@@ -345,15 +345,12 @@ function App() {
   const [terminateElapsedMinutes, setTerminateElapsedMinutes] = useState<number>(0);
   const [terminateChargedMinutes, setTerminateChargedMinutes] = useState<number>(0);
   const [terminateOriginalAmount, setTerminateOriginalAmount] = useState<number>(0);
-  const [terminateOffers, setTerminateOffers] = useState<any[]>([]);
-  const [terminateSelectedOfferIds, setTerminateSelectedOfferIds] = useState<number[]>([]);
   const [terminateDiscount, setTerminateDiscount] = useState<number>(0);
   const [terminateFinalAmount, setTerminateFinalAmount] = useState<number>(0);
   const [terminateCashAmount, setTerminateCashAmount] = useState<number>(0);
   const [terminateUpiAmount, setTerminateUpiAmount] = useState<number>(0);
   const [terminateError, setTerminateError] = useState<string | null>(null);
   const [isTerminating, setIsTerminating] = useState<boolean>(false);
-  const [isLoadingTerminateOffers, setIsLoadingTerminateOffers] = useState<boolean>(false);
   const [sessionSummaryResult, setSessionSummaryResult] = useState<any | null>(null);
 
   // Live countdown timers: bookingId -> seconds remaining / until start
@@ -1391,9 +1388,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  const handleTerminatePreviousSession = () => {
-    if (!selectedInstanceForBooking || !bookingSessionStatus) return;
-    openPreviousSessionTerminationModal(selectedInstanceForBooking, bookingSessionStatus);
+  const handleTerminatePreviousSession = async () => {
+    if (!selectedInstanceForBooking) return;
+    setIsTerminatingPreviousSession(true);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const currentStatus = await fetchSetupSessionStatus(selectedInstanceForBooking.instanceId, token);
+      setBookingSessionStatus(currentStatus);
+      openPreviousSessionTerminationModal(selectedInstanceForBooking, currentStatus);
+    } catch (error) {
+      setBookingFormError(error instanceof Error ? error.message : 'Could not load the previous session details.');
+    } finally {
+      setIsTerminatingPreviousSession(false);
+    }
   };
 
   const handleTerminateConfirmationPreviousSession = async () => {
@@ -1417,8 +1424,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  const handleTerminateDashboardSession = (instance: SetupInstance, status: SetupSessionStatus) => {
-    openPreviousSessionTerminationModal(instance, status);
+  const handleTerminateDashboardSession = async (instance: SetupInstance) => {
+    setIsTerminatingPreviousSession(true);
+    setOccupancyError(null);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const currentStatus = await fetchSetupSessionStatus(instance.instanceId, token);
+      openPreviousSessionTerminationModal(instance, currentStatus);
+    } catch (error) {
+      setOccupancyError(error instanceof Error ? error.message : 'Could not load the previous session details.');
+    } finally {
+      setIsTerminatingPreviousSession(false);
+    }
   };
 
   // Toggle game selection
@@ -1810,8 +1827,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   // Recalculate duration, rates, and discounts for termination modal
   const updateTerminationCalculations = (
     newEndTimeStr: string,
-    selectedOfferIdsList: number[],
-    currentOffersList: any[],
     targetInst: SetupInstance | null = terminatingInstance
   ) => {
     if (!targetInst || !targetInst.currentBooking) return;
@@ -1829,13 +1844,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const players = booking.playersCount || 1;
     const basePrice = Math.round(ratePerHour * players * (charged / 60));
 
-    let discount = 0;
-    selectedOfferIdsList.forEach((id) => {
-      const offer = currentOffersList.find((o) => o.id === id);
-      if (offer && offer.discount) {
-        discount += Number(offer.discount) || 0;
-      }
-    });
+    const discount = Math.max(
+      0,
+      Number(booking.originalAmount || 0) - Number(booking.amountCharged || 0),
+    );
 
     const finalAmount = Math.max(0, basePrice - discount);
 
@@ -1849,7 +1861,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   };
 
   // Open Custom End Session & Checkout Modal
-  const openTerminateModal = async (inst: SetupInstance) => {
+  const openTerminateModal = (inst: SetupInstance) => {
     if (!inst.currentBooking) return;
     setTerminatingInstance(inst);
     setTerminateError(null);
@@ -1865,47 +1877,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const ratePerHour = getSetupRateForPlayers(inst.setup, booking.playersCount || 1) || 50;
     const players = booking.playersCount || 1;
     const basePrice = Math.round(ratePerHour * players * (charged / 60));
+    const existingDiscount = Math.max(0, Number(booking.originalAmount || 0) - Number(booking.amountCharged || 0));
+    const finalAmount = Math.max(0, basePrice - existingDiscount);
 
     setTerminateElapsedMinutes(elapsed);
     setTerminateChargedMinutes(charged);
     setTerminateOriginalAmount(basePrice);
-    setTerminateSelectedOfferIds([]);
-    setTerminateDiscount(0);
-    setTerminateFinalAmount(basePrice);
-    setTerminateCashAmount(basePrice);
+    setTerminateDiscount(existingDiscount);
+    setTerminateFinalAmount(finalAmount);
+    setTerminateCashAmount(finalAmount);
     setTerminateUpiAmount(0);
-
-    // Fetch / Evaluate eligible offers for this session
-    setIsLoadingTerminateOffers(true);
-    try {
-      const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          setupInstanceId: inst.instanceId,
-          count: players,
-          date: getTodayDateString(),
-          startTime: formatTimeStr(booking.startTime || now.toISOString()),
-          noOfHours: Math.max(0.25, charged / 60),
-          gameIds: [1]
-        })
-      });
-      await assertSuccessfulJsonResponse(offerRes);
-      const offerData = await offerRes.json();
-      if (offerData && offerData.success && Array.isArray(offerData.offers)) {
-        setTerminateOffers(offerData.offers);
-      } else {
-        setTerminateOffers([]);
-      }
-    } catch (err) {
-      console.warn('Could not load dynamic offers for termination:', err);
-      setTerminateOffers([]);
-    } finally {
-      setIsLoadingTerminateOffers(false);
-    }
   };
 
   function openPreviousSessionTerminationModal(
@@ -1913,7 +1894,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     status: SetupSessionStatus,
   ) {
     const previousSession = status.previousSession;
-    if (!previousSession?.actualStartTime) {
+    const sessionStartTime = previousSession?.actualStartTime ?? previousSession?.scheduledStartTime;
+    if (!previousSession || !sessionStartTime) {
       const message = 'The termination API did not return the previous session start time.';
       setOccupancyError(message);
       setBookingFormError(message);
@@ -1932,8 +1914,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         phoneNumber: previousSession.phoneNumber,
         playersCount: previousSession.playersCount,
         status: previousSession.status,
-        startTime: previousSession.actualStartTime,
-        endTime: previousSession.actualEndTime ?? new Date().toISOString(),
+        startTime: sessionStartTime,
+        endTime: previousSession.actualEndTime ?? previousSession.scheduledEndTime ?? new Date().toISOString(),
         originalAmount: Number(previousSession.originalAmount ?? amountCharged),
         amountCharged,
         timeLeftMinutes: 0,
@@ -1947,16 +1929,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   // Handle End Time Adjustment in Modal
   const handleTerminateEndTimeChange = (val: string) => {
     setTerminateEndTime(val);
-    updateTerminationCalculations(val, terminateSelectedOfferIds, terminateOffers);
-  };
-
-  // Toggle Offer in Termination Modal
-  const handleToggleTerminateOffer = (offerId: number) => {
-    const nextSelected = terminateSelectedOfferIds.includes(offerId)
-      ? terminateSelectedOfferIds.filter((id) => id !== offerId)
-      : [...terminateSelectedOfferIds, offerId];
-    setTerminateSelectedOfferIds(nextSelected);
-    updateTerminationCalculations(terminateEndTime, nextSelected, terminateOffers);
+    updateTerminationCalculations(val);
   };
 
   // Submit Final Session Termination.
@@ -3210,9 +3183,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       <button
                                         className="btn-card-action"
                                         style={{ width: '100%', color: 'var(--danger)', borderColor: 'var(--danger)' }}
-                                        onClick={() => handleTerminateDashboardSession(inst, sessionStatus)}
+                                        onClick={() => handleTerminateDashboardSession(inst)}
+                                        disabled={isTerminatingPreviousSession}
                                       >
-                                        Review and terminate session
+                                        {isTerminatingPreviousSession ? 'Loading termination details...' : 'Review and terminate session'}
                                       </button>
                                     ) : (
                                       <button className="btn-card-action primary" style={{ width: '100%' }} onClick={() => openBookingModal(inst)}>
@@ -3295,7 +3269,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     onClick={handleTerminatePreviousSession}
                                     disabled={isTerminatingPreviousSession}
                                   >
-                                    {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                    {isTerminatingPreviousSession ? 'Loading details...' : 'Terminate previous session'}
                                   </button>
                                 </div>
                               )}
@@ -3746,7 +3720,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                               onClick={handleTerminatePreviousSession}
                                               disabled={isTerminatingPreviousSession}
                                             >
-                                              {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                              {isTerminatingPreviousSession ? 'Loading details...' : 'Terminate previous session'}
                                             </button>
                                           )}
                                         </div>
@@ -4280,7 +4254,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                               onClick={handleTerminatePreviousSession}
                                               disabled={isTerminatingPreviousSession}
                                             >
-                                              {isTerminatingPreviousSession ? 'Terminating...' : 'Terminate previous session'}
+                                              {isTerminatingPreviousSession ? 'Loading details...' : 'Terminate previous session'}
                                             </button>
                                           )}
                                         </div>
@@ -5899,61 +5873,6 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Pro-Rated Base</div>
                               <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>₹{terminateOriginalAmount}</div>
                             </div>
-                          </div>
-
-                          {/* Dynamic Offers & Promotions Module */}
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>Apply Offers & Promotions</span>
-                              {isLoadingTerminateOffers && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Evaluating deals...</span>}
-                            </div>
-                            
-                            {terminateOffers.length === 0 && !isLoadingTerminateOffers ? (
-                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '8px', background: 'var(--bg-card-hover)', borderRadius: '6px', textAlign: 'center' }}>
-                                No active promo deals applicable to this session duration.
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '130px', overflowY: 'auto' }}>
-                                {terminateOffers.map((offer: any) => {
-                                  const isSelected = terminateSelectedOfferIds.includes(offer.id);
-                                  return (
-                                    <label 
-                                      key={offer.id}
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '10px',
-                                        padding: '8px 10px',
-                                        borderRadius: '6px',
-                                        border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
-                                        background: isSelected ? 'rgba(99, 102, 241, 0.08)' : 'var(--bg-card-hover)',
-                                        cursor: offer.eligible ? 'pointer' : 'not-allowed',
-                                        opacity: offer.eligible ? 1 : 0.55
-                                      }}
-                                    >
-                                      <input 
-                                        type="checkbox"
-                                        disabled={!offer.eligible}
-                                        checked={isSelected}
-                                        onChange={() => handleToggleTerminateOffer(offer.id)}
-                                        style={{ accentColor: 'var(--accent)', width: 15, height: 15 }}
-                                      />
-                                      <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-heading)' }}>{offer.name}</div>
-                                        <div style={{ fontSize: '0.72rem', color: offer.eligible ? 'var(--success)' : 'var(--text-muted)' }}>
-                                          {offer.eligible ? (offer.reason || `Apply ₹${offer.discount} discount`) : offer.reason}
-                                        </div>
-                                      </div>
-                                      {offer.discount > 0 && (
-                                        <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--success)' }}>
-                                          -₹{offer.discount}
-                                        </span>
-                                      )}
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            )}
                           </div>
 
                           {/* Settlement & Split Payment Recording */}
