@@ -4,7 +4,7 @@ import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
 import { API_BASE_URL, assertSuccessfulJsonResponse } from './lib/api';
 import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
-import { formatSetupRatesShort, getSetupRateForPlayers, getSetupRates } from './lib/setupRates';
+import { formatSetupRatesShort, getSetupRateForPlayers } from './lib/setupRates';
 import {
   fetchUpcomingSchedule,
   formatScheduleDate,
@@ -12,6 +12,10 @@ import {
   type UpcomingBooking,
 } from './lib/schedule';
 import { formatCountdown, secondsUntilIso } from './lib/sessionTiming';
+import {
+  fetchExtensionPreview,
+  type ExtensionPreviewResponse,
+} from './lib/sessionExtension';
 import {
   fetchSetupSessionStatus,
   type SetupSessionStatus,
@@ -380,13 +384,13 @@ function App() {
   }, []);
   const dismissedAlertsRef = useRef<Record<string, boolean>>({});
   const startedRefreshRef = useRef<Record<number, boolean>>({});
+  const extensionPreviewRequestRef = useRef(0);
 
   // Booking extension states
   const [extendingSessionInstance, setExtendingSessionInstance] = useState<SetupInstance | null>(null);
   const [extensionMinutes, setExtensionMinutes] = useState(30);
-  const [extensionCashAmount, setExtensionCashAmount] = useState<number | string>('');
-  const [extensionUpiAmount, setExtensionUpiAmount] = useState<number | string>('');
-  const [extensionOfferIds, setExtensionOfferIds] = useState<number[]>([]);
+  const [extensionPreview, setExtensionPreview] = useState<ExtensionPreviewResponse | null>(null);
+  const [isExtensionPreviewLoading, setIsExtensionPreviewLoading] = useState(false);
   const [isExtensionSubmitting, setIsExtensionSubmitting] = useState(false);
   const [extensionError, setExtensionError] = useState<string | null>(null);
   const [extensionSummaryResult, setExtensionSummaryResult] = useState<any | null>(null);
@@ -2174,15 +2178,44 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
+  const loadExtensionPreview = async (instance: SetupInstance, minutes: number) => {
+    const requestId = ++extensionPreviewRequestRef.current;
+    setIsExtensionPreviewLoading(true);
+    setExtensionError(null);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const preview = await fetchExtensionPreview(instance.instanceId, minutes, token);
+      if (requestId !== extensionPreviewRequestRef.current) return;
+      setExtensionPreview(preview);
+    } catch (error) {
+      if (requestId !== extensionPreviewRequestRef.current) return;
+      setExtensionPreview(null);
+      setExtensionError(error instanceof Error ? error.message : 'Could not load the extension preview.');
+    } finally {
+      if (requestId === extensionPreviewRequestRef.current) {
+        setIsExtensionPreviewLoading(false);
+      }
+    }
+  };
+
+  const openExtensionModal = (instance: SetupInstance, minutes = 30) => {
+    setExtendingSessionInstance(instance);
+    setExtensionMinutes(minutes);
+    setExtensionPreview(null);
+    setExtensionError(null);
+    void loadExtensionPreview(instance, minutes);
+  };
+
+  const handleExtensionMinutesChange = (minutes: number) => {
+    setExtensionMinutes(minutes);
+    setExtensionPreview(null);
+    if (extendingSessionInstance) {
+      void loadExtensionPreview(extendingSessionInstance, minutes);
+    }
+  };
+
   // 2. Submit Session Extension to POST /api/bookings/:id/extend
-  const handleExtendBookingSubmit = async (
-    e?: React.FormEvent,
-    customBookingId?: number,
-    customMinutes?: number,
-    customOfferIds?: number[],
-    customCash?: number,
-    customUpi?: number
-  ) => {
+  const handleExtendBookingSubmit = async (e?: React.FormEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -2192,14 +2225,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const targetInst = extendingSessionInstance;
     const targetBooking = targetInst?.currentBooking;
     const targetId = Number(
-      customBookingId || 
       getBookingId(targetBooking) || 
       (targetBooking as any)?.bookingId || 
       (targetBooking as any)?.id || 
       (targetBooking as any)?.booking_id || 
       0
     );
-    const minsToExtend = Number(customMinutes || extensionMinutes || 30);
+    const minsToExtend = Number(extensionMinutes || 30);
 
     console.log('[Extend Session API] Calling /extend with:', { targetId, minsToExtend, targetBooking });
 
@@ -2218,18 +2250,21 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       return;
     }
 
+    if (!extensionPreview || extensionPreview.extensionPreview.extensionMinutes !== minsToExtend) {
+      setExtensionError('Wait for the extension preview before extending the session.');
+      return;
+    }
+
+    if (!extensionPreview.canExtend) {
+      setExtensionError(extensionPreview.conflict || 'This session cannot be extended.');
+      return;
+    }
+
     setIsExtensionSubmitting(true);
     setExtensionError(null);
 
-    const appliedIds = customOfferIds !== undefined ? customOfferIds : extensionOfferIds;
-    const cash = customCash !== undefined ? customCash : (Number(extensionCashAmount) || 0);
-    const upi = customUpi !== undefined ? customUpi : (Number(extensionUpiAmount) || 0);
-
-    const payload: any = {
+    const payload = {
       minutes: Number(minsToExtend),
-      appliedOfferIds: appliedIds,
-      cashAmount: cash,
-      upiAmount: upi
     };
 
     try {
@@ -2340,9 +2375,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         setExtendingSessionInstance(null);
         dismissActiveSessionAlert();
         setExtensionMinutes(30);
-        setExtensionCashAmount('');
-        setExtensionUpiAmount('');
-        setExtensionOfferIds([]);
+        setExtensionPreview(null);
 
         // Fetch fresh state from backend in background
         fetchOccupancyData(true);
@@ -2365,9 +2398,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  // 1-Click Quick Extend for Warning Modal
-  const handleQuickExtend = async (bookingId: number, minutes: number) => {
-    return handleExtendBookingSubmit(undefined, bookingId, minutes);
+  const handleQuickExtend = (bookingId: number, minutes: number) => {
+    const instance = occupancyData.find(
+      (item) => getBookingId(item.currentBooking) === bookingId,
+    );
+    if (!instance) {
+      setExtensionError('The active session could not be found.');
+      return;
+    }
+    dismissActiveSessionAlert();
+    openExtensionModal(instance, minutes);
   };
 
   // Run Diagnostics Scan
@@ -3098,9 +3138,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                            style={{ flex: 1, fontSize: '0.78rem', padding: '6px 8px' }}
                                            onClick={(e) => {
                                              e.stopPropagation();
-                                             setExtendingSessionInstance(inst);
-                                             setExtensionMinutes(30);
-                                             setExtensionError(null);
+                                             openExtensionModal(inst);
                                            }}
                                          >
                                            + Extend Session
@@ -3112,8 +3150,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                            title="1-Click Quick Extend (+30m)"
                                            onClick={(e) => {
                                              e.stopPropagation();
-                                             const bId = getBookingId(inst.currentBooking);
-                                             handleExtendBookingSubmit(undefined, bId, 30);
+                                             openExtensionModal(inst);
                                            }}
                                            disabled={isExtensionSubmitting}
                                          >
@@ -5525,7 +5562,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       color: isSelected ? 'white' : 'var(--text-heading)',
                                       borderColor: isSelected ? 'var(--accent)' : 'var(--border)'
                                     }}
-                                    onClick={() => setExtensionMinutes(mins)}
+                                    onClick={() => handleExtensionMinutesChange(mins)}
                                   >
                                     +{mins < 60 ? `${mins}m` : `${mins / 60}h`}
                                   </button>
@@ -5539,7 +5576,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 id="extension-minutes-select"
                                 className="form-input"
                                 value={extensionMinutes}
-                                onChange={(e) => setExtensionMinutes(Number(e.target.value))}
+                                onChange={(e) => handleExtensionMinutesChange(Number(e.target.value))}
                                 disabled={isExtensionSubmitting}
                               >
                                 <option value={15}>+15 Minutes (+0.25 hour)</option>
@@ -5552,74 +5589,58 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             </div>
                           </div>
 
-                          {/* Calculation & Pricing Preview */}
-                          {(() => {
-                            const isMulti = (extendingSessionInstance.currentBooking?.playersCount || 1) > 1;
-                            const setupRate = isMulti 
-                              ? (getSetupRates(extendingSessionInstance.setup).multi || 120)
-                              : (getSetupRates(extendingSessionInstance.setup).single || 150);
-                            const players = extendingSessionInstance.currentBooking?.playersCount || 1;
-                            const addedCharge = Math.round((extensionMinutes / 60) * setupRate * players);
-                            const currentCharged = Number(extendingSessionInstance.currentBooking?.amountCharged || 0);
-                            const newTotal = currentCharged + addedCharge;
+                          {isExtensionPreviewLoading && (
+                            <div style={{ padding: '18px', textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg-card-hover)', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                              Recalculating timing, conflicts, pricing, and offers...
+                            </div>
+                          )}
 
-                            const endMs = parseTimestampMs(extendingSessionInstance.currentBooking.endTime);
-                            const newEndFormatted = endMs ? formatTimeStr(new Date(endMs + extensionMinutes * 60 * 1000).toISOString()) : 'Extended';
+                          {extensionPreview && !extensionPreview.canExtend && (
+                            <div className="form-error-banner">
+                              <span>{extensionPreview.conflict || 'This session cannot be extended for the selected duration.'}</span>
+                            </div>
+                          )}
 
-                            return (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Rate per Player/Hr:</span>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>₹{setupRate}/hr ({isMulti ? 'Multiplayer' : 'Single Player'})</span>
-                                  </div>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Estimated Additional Charge:</span>
-                                    <span style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--success)' }}>+₹{addedCharge}</span>
-                                  </div>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>New Estimated End Time:</span>
-                                    <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-heading)' }}>⏱ {newEndFormatted}</span>
-                                  </div>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: '6px' }}>
-                                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>Estimated Total Session:</span>
-                                    <span style={{ fontSize: '1.1rem', fontWeight: 900, color: 'var(--accent)' }}>₹{newTotal}</span>
-                                  </div>
+                          {extensionPreview?.canExtend && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Rate per Player/Hr:</span>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>₹{extensionPreview.extensionPreview.pricing.ratePerPersonPerHour}/hr</span>
                                 </div>
-
-                                {/* Payment Breakdown (Cash / UPI) */}
-                                <div style={{ background: 'var(--bg-card-hover)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                  <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-heading)' }}>
-                                    💵 Additional Payment Collection (₹{addedCharge})
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>New End Time:</span>
+                                  <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-heading)' }}>⏱ {formatTimeStr(extensionPreview.extensionPreview.newEndTime)}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Original Amount:</span>
+                                  <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.originalAmount}</span>
+                                </div>
+                                {extensionPreview.extensionPreview.pricing.discountApplied > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Offer Discount:</span>
+                                    <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--success)' }}>−₹{extensionPreview.extensionPreview.pricing.discountApplied}</span>
                                   </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                    <div className="form-group" style={{ margin: 0 }}>
-                                      <label className="form-label" style={{ fontSize: '0.68rem', margin: '0 0 2px 0' }}>Cash (₹)</label>
-                                      <input
-                                        type="number"
-                                        className="form-input"
-                                        placeholder={`${addedCharge}`}
-                                        value={extensionCashAmount}
-                                        onChange={(e) => setExtensionCashAmount(e.target.value)}
-                                        style={{ padding: '6px 8px', fontSize: '0.82rem' }}
-                                      />
-                                    </div>
-                                    <div className="form-group" style={{ margin: 0 }}>
-                                      <label className="form-label" style={{ fontSize: '0.68rem', margin: '0 0 2px 0' }}>UPI (₹)</label>
-                                      <input
-                                        type="number"
-                                        className="form-input"
-                                        placeholder="0"
-                                        value={extensionUpiAmount}
-                                        onChange={(e) => setExtensionUpiAmount(e.target.value)}
-                                        style={{ padding: '6px 8px', fontSize: '0.82rem' }}
-                                      />
-                                    </div>
-                                  </div>
+                                )}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: '6px' }}>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>Additional Amount Due at Termination:</span>
+                                  <span style={{ fontSize: '1.1rem', fontWeight: 900, color: 'var(--accent)' }}>₹{extensionPreview.extensionPreview.pricing.additionalAmountToPay}</span>
                                 </div>
                               </div>
-                            );
-                          })()}
+
+                              {extensionPreview.extensionPreview.appliedOffers.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-heading)' }}>Automatically Applied Offers</span>
+                                  {extensionPreview.extensionPreview.appliedOffers.map((offer) => (
+                                    <div key={offer.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(16, 185, 129, 0.08)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '6px' }}>
+                                      <span style={{ fontSize: '0.78rem', fontWeight: 700 }}>{offer.code}</span>
+                                      <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--success)' }}>−₹{offer.discount}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                         </div>
 
@@ -5628,7 +5649,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             type="button"
                             className="btn-card-action"
                             onClick={() => setExtendingSessionInstance(null)}
-                            disabled={isExtensionSubmitting}
+                            disabled={isExtensionSubmitting || isExtensionPreviewLoading || !extensionPreview?.canExtend}
                           >
                             Cancel
                           </button>
@@ -5714,7 +5735,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           <div className="review-card-header">
                             <div className="review-card-title">
                               <span>🏷️</span>
-                              <span>Pricing & Payment Ledger</span>
+                              <span>Pricing & Offer Summary</span>
                             </div>
                             <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
                               ₹{extensionSummaryResult.pricing?.ratePerPersonPerHour}/player/hr ({extensionSummaryResult.pricing?.playerType})
@@ -5761,8 +5782,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                             <div className="review-total-banner" style={{ marginTop: '6px' }}>
                               <div>
-                                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>Additional Paid Difference</div>
-                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>New Total − Previous Total</div>
+                                <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)' }}>Additional Amount Due at Termination</div>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Payment is collected when the session ends</div>
                               </div>
                               <div style={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--success)' }}>
                                 +₹{extensionSummaryResult.pricing?.additionalAmountToPay}
