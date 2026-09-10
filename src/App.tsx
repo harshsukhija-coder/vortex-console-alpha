@@ -70,6 +70,22 @@ interface SetupInstance {
   currentBooking: BookingDetails | null;
 }
 
+type DashboardTab = 'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule';
+
+const DASHBOARD_ROUTES: Record<DashboardTab, string> = {
+  bookings: '#/dashboard/bookings',
+  schedule: '#/dashboard/schedule',
+  tentative: '#/dashboard/tentative',
+  sessions: '#/dashboard/sessions',
+  stats: '#/dashboard/stats',
+};
+
+function getDashboardTab(hash: string): DashboardTab {
+  const matchingTab = (Object.entries(DASHBOARD_ROUTES) as Array<[DashboardTab, string]>)
+    .find(([, route]) => route === hash);
+  return matchingTab?.[0] ?? 'bookings';
+}
+
 function App() {
   // Mobile navbar toggle state
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -78,7 +94,7 @@ function App() {
   const [systemHealth, setSystemHealth] = useState<'checking' | 'healthy' | 'offline'>('checking');
 
   // Dashboard Sub-navigation Tabs State
-  const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule'>('bookings');
+  const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTab>('bookings');
 
   // Past Sessions date-filtered ledger
   const [pastSessionsDate, setPastSessionsDate] = useState<string>(() => {
@@ -219,7 +235,7 @@ function App() {
     return `${m}m ${String(s).padStart(2, '0')}s`;
   };
 
-  // Client-side Hash Router state ('#/', '#/login', '#/dashboard')
+  // Client-side hash router state, including dashboard operation routes.
   const [currentHash, setCurrentHash] = useState<string>('#/');
 
   // Authentication states (restored from localStorage)
@@ -408,6 +424,9 @@ function App() {
     const handleHashChange = () => {
       const hash = window.location.hash || '#/';
       setCurrentHash(hash);
+      if (hash.startsWith('#/dashboard')) {
+        setActiveDashboardTab(getDashboardTab(hash));
+      }
       setIsMenuOpen(false); // Close mobile menu on navigate
     };
 
@@ -438,13 +457,13 @@ function App() {
 
   // Handle Route Guarding & Redirection
   useEffect(() => {
-    if (currentHash === '#/dashboard' && !authToken) {
+    if (currentHash.startsWith('#/dashboard') && !authToken) {
       setTimeout(() => {
         setLoginInfoMessage((prev) => prev ?? 'Please sign in to access the control center.');
       }, 0);
       window.location.hash = '#/login';
     } else if (currentHash === '#/login' && authToken) {
-      window.location.hash = '#/dashboard';
+      window.location.hash = DASHBOARD_ROUTES.bookings;
     }
   }, [currentHash, authToken]);
 
@@ -698,7 +717,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   // Fetch tentative bookings when tentative tab is active or date changes
   useEffect(() => {
-    if (currentHash === '#/dashboard' && authToken && activeDashboardTab === 'tentative') {
+    if (currentHash.startsWith('#/dashboard') && authToken && activeDashboardTab === 'tentative') {
       fetchTentativeBookings(tentativeDate);
     }
   }, [currentHash, authToken, activeDashboardTab, tentativeDate, fetchTentativeBookings]);
@@ -772,14 +791,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   // Fetch past sessions when sessions tab is active or date/filter changes
   useEffect(() => {
-    if (currentHash === '#/dashboard' && authToken && activeDashboardTab === 'sessions') {
+    if (currentHash.startsWith('#/dashboard') && authToken && activeDashboardTab === 'sessions') {
       fetchPastSessions(pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter);
     }
   }, [currentHash, authToken, activeDashboardTab, pastSessionsDate, pastSessionsStationFilter, pastSessionsStatusFilter, fetchPastSessions]);
 
   // Poll occupancy data while in dashboard
   useEffect(() => {
-    if (currentHash === '#/dashboard' && authToken) {
+    if (currentHash.startsWith('#/dashboard') && authToken) {
       const loadTimer = setTimeout(() => {
         fetchOccupancyData();
         fetchScheduleData(true);
@@ -1204,7 +1223,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         setLoginPassword('');
         
         // Redirect to dashboard
-        window.location.hash = '#/dashboard';
+        window.location.hash = DASHBOARD_ROUTES.bookings;
       } else {
         setLoginError(data.error || 'Invalid email or password. Please try again.');
       }
@@ -2445,7 +2464,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       <div className="glow-blob glow-blob-purple"></div>
       <div className="glow-blob glow-blob-cyan"></div>
 
-      <div className={`app-container ${currentHash === '#/dashboard' && authToken ? 'dashboard-mode' : 'landing-mode'}`}>
+      <div className={`app-container ${currentHash.startsWith('#/dashboard') && authToken ? 'dashboard-mode' : 'landing-mode'}`}>
         {/* Navigation Header */}
         <header className="header">
           <div className="logo-container" style={{ cursor: 'pointer' }} onClick={() => navigateTo('#/')}>
@@ -2508,7 +2527,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>HOME</a>
             {authToken ? (
               <>
-                <a href="#/dashboard" onClick={(e) => { e.preventDefault(); navigateTo('#/dashboard'); }} className={`nav-link ${currentHash === '#/dashboard' ? 'active' : ''}`}>CONTROL CENTER</a>
+                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>CONTROL CENTER</a>
                 <div className="user-profile">
                   <span className="user-email-text">{authUser?.email}</span>
                   <span className={`user-role-badge ${authUser?.role.toLowerCase()}`}>
@@ -2552,7 +2571,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>HOME</a>
             {authToken ? (
               <>
-                <a href="#/dashboard" onClick={(e) => { e.preventDefault(); navigateTo('#/dashboard'); }} className={`nav-link ${currentHash === '#/dashboard' ? 'active' : ''}`}>CONTROL CENTER</a>
+                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>CONTROL CENTER</a>
                 <div className="user-profile" style={{ margin: '8px 0' }}>
                   <span className="user-email-text">{authUser?.email}</span>
                   <span className={`user-role-badge ${authUser?.role.toLowerCase()}`}>
@@ -2593,7 +2612,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </p>
 
                   <div className="hero-actions">
-                    <button className="btn-primary" onClick={() => navigateTo(authToken ? '#/dashboard' : '#/login')}>
+                    <button className="btn-primary" onClick={() => navigateTo(authToken ? DASHBOARD_ROUTES.bookings : '#/login')}>
                       {authToken ? 'Open Control Center' : 'Sign In to Dashboard'}
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="9 18 15 12 9 6"></polyline>
@@ -2794,7 +2813,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             </div>
           )}
 
-          {currentHash === '#/dashboard' && authToken && (
+          {currentHash.startsWith('#/dashboard') && authToken && (
             <div className="dashboard-layout">
               {/* Dashboard Sidebar Navigation */}
               <aside className={`dashboard-sidebar ${isSidebarCollapsed ? 'collapsed' : ''} ${isDashboardNavOpen ? 'mobile-open' : ''}`}>
@@ -2834,7 +2853,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   <nav className="sidebar-menu" id="dashboard-navigation">
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'bookings' ? 'active' : ''}`}
-                      onClick={() => { setActiveDashboardTab('bookings'); setIsDashboardNavOpen(false); }}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.bookings)}
                       title="Allocations & Bookings"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2848,7 +2867,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'schedule' ? 'active' : ''}`}
-                      onClick={() => { setActiveDashboardTab('schedule'); setIsDashboardNavOpen(false); }}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.schedule)}
                       title="Upcoming Schedule"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2863,7 +2882,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'tentative' ? 'active' : ''}`}
-                      onClick={() => { setActiveDashboardTab('tentative'); setIsDashboardNavOpen(false); }}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.tentative)}
                       title="Tentative Ledger"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2877,7 +2896,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'sessions' ? 'active' : ''}`}
-                      onClick={() => { setActiveDashboardTab('sessions'); setIsDashboardNavOpen(false); }}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.sessions)}
                       title="Past Sessions & Revenue"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2889,7 +2908,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'stats' ? 'active' : ''}`}
-                      onClick={() => { setActiveDashboardTab('stats'); setIsDashboardNavOpen(false); }}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.stats)}
                       title="Performance & Stats"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -6431,7 +6450,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             <div className="footer-links">
               <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className="footer-link">Home</a>
               {authToken && (
-                <a href="#/dashboard" onClick={(e) => { e.preventDefault(); navigateTo('#/dashboard'); }} className="footer-link">Control Center</a>
+                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className="footer-link">Control Center</a>
               )}
               <a href="https://google.com" className="footer-link">User Guide</a>
             </div>

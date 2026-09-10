@@ -30,3 +30,12 @@ export const formatAgeGroup = (value: string): string => {
   if (value === 'UNATTRIBUTED_ADDITIONAL') return 'Additional';
   return value;
 };
+
+export const formatAnalyticsRange = (
+  start: string,
+  endExclusive: string,
+): string => {
+  const end = new Date(endExclusive);
+  end.setMilliseconds(end.getMilliseconds() - 1);
+  return `${formatAnalyticsDate(start)} – ${formatAnalyticsDate(end.toISOString())}`;
+};

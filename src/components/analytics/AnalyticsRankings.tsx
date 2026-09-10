@@ -1,4 +1,5 @@
 import { formatCurrency, formatDateTime } from './formatters';
+import SectionDownloadButton from './SectionDownloadButton';
 import type { ConsoleInstanceStat, GameStat, TopPlayerStat } from './types';
 
 interface AnalyticsRankingsProps {
@@ -19,7 +20,10 @@ export default function AnalyticsRankings({
       <article className="analytics-panel analytics-table-panel">
         <header>
           <div><span className="analytics-eyebrow">Hardware</span><h3>Console performance</h3></div>
-          <span>{consoleInstances.length} stations</span>
+          <div className="analytics-section-actions">
+            <span>{consoleInstances.length} stations</span>
+            <SectionDownloadButton rows={consoleInstances} sheetName="Console Performance" filename="console-performance" />
+          </div>
         </header>
         <div className="analytics-table-wrap">
           <table className="analytics-table">
@@ -46,7 +50,10 @@ export default function AnalyticsRankings({
       </article>
 
       <article className="analytics-panel">
-        <header><div><span className="analytics-eyebrow">Loyalty</span><h3>Top players</h3></div></header>
+        <header>
+          <div><span className="analytics-eyebrow">Loyalty</span><h3>Top players</h3></div>
+          <SectionDownloadButton rows={topPlayers} sheetName="Top Players" filename="top-players" />
+        </header>
         <div className="analytics-player-list">
           {topPlayers.slice(0, 6).map((player, index) => (
             <div className="analytics-player" key={`${player.phoneNumber}-${index}`}>
@@ -60,14 +67,17 @@ export default function AnalyticsRankings({
       </article>
 
       <article className="analytics-panel">
-        <header><div><span className="analytics-eyebrow">Engagement</span><h3>Most played games</h3></div></header>
+        <header>
+          <div><span className="analytics-eyebrow">Engagement</span><h3>Most played games</h3></div>
+          <SectionDownloadButton rows={games} sheetName="Most Played Games" filename="most-played-games" />
+        </header>
         <div className="analytics-game-list">
           {games.slice(0, 8).map((game) => (
             <div className="analytics-game" key={game.gameId}>
               <div><strong>{game.name}</strong><span>{game.playerExposures} player exposures · {game.sessionHours.toFixed(1)}h</span></div>
               <strong>{game.sessionsPlayed}</strong>
               <span className="analytics-game-bar"><i style={{ width: `${(game.sessionsPlayed / maxGameSessions) * 100}%` }} /></span>
-              <small>Last played {formatDateTime(game.lastPlayedAt)}</small>
+              <small>{game.lastPlayedAt ? `Last played ${formatDateTime(game.lastPlayedAt)}` : 'Last played time unavailable'}</small>
             </div>
           ))}
           {games.length === 0 && <div className="analytics-empty">No games played for this range</div>}

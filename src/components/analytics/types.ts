@@ -122,9 +122,23 @@ export interface SessionAnalytics {
 
 export interface SessionAnalyticsResponse {
   success: boolean;
-  analytics?: SessionAnalytics;
+  analytics?: SessionAnalyticsPayload;
   error?: string;
   message?: string;
 }
 
-export type AnalyticsRangeMode = 'LAST_15_DAYS' | 'MONTH';
+export interface SessionAnalyticsPayload {
+  generatedAt?: string;
+  range: AnalyticsRange;
+  overview: Partial<AnalyticsOverview>;
+  ageGroups?: AgeGroupStat[];
+  consoleInstances?: ConsoleInstanceStat[];
+  games?: GameStat[];
+  topPlayers?: TopPlayerStat[];
+  dailyTrend?: DailyTrendStat[];
+  peakStartHours?: PeakStartHourStat[];
+  configurationBreakdown?: ConfigurationStat[];
+  dataQuality?: Partial<AnalyticsDataQuality>;
+}
+
+export type AnalyticsRangeMode = 'LAST_15_DAYS' | 'DATE' | 'MONTH';

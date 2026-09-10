@@ -13,9 +13,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "html-to-image": "^1.11.13",
+    "jszip": "^3.10.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "recharts": "^3.10.1"
+    "recharts": "^3.10.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
