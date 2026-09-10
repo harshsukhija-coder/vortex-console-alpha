@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer';
 import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
@@ -17,6 +17,8 @@ import {
   type SetupSessionStatus,
 } from './lib/setupSession';
 import './App.css';
+
+const PerformanceAnalytics = lazy(() => import('./components/analytics/PerformanceAnalytics'));
 
 // Log item interface for platform updates feed
 interface LogItem {
@@ -144,12 +146,7 @@ function App() {
     const checkSystemHealth = async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/health`, { cache: 'no-store' });
-        const data: unknown = await response.json();
-        const isHealthy = response.ok
-          && typeof data === 'object'
-          && data !== null
-          && (data as Record<string, unknown>).status === 'healthy';
-        if (isMounted) setSystemHealth(isHealthy ? 'healthy' : 'offline');
+        if (isMounted) setSystemHealth(response.ok ? 'healthy' : 'offline');
       } catch {
         if (isMounted) setSystemHealth('offline');
       }
@@ -759,8 +756,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         setPastSessionsError(data.error || data.message || 'Failed to load past sessions.');
         setPastSessionsData({});
       }
-    } catch {
-      setPastSessionsError('Failed to connect to the past sessions API. Ensure the backend engine is online.');
+    } catch (error) {
+      setPastSessionsError(
+        error instanceof TypeError
+          ? 'Failed to connect to the past sessions API. Ensure the backend engine is online.'
+          : error instanceof Error
+            ? error.message
+            : 'Failed to load past sessions.'
+      );
       setPastSessionsData({});
     } finally {
       setIsPastSessionsLoading(false);
@@ -4955,8 +4958,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </>
                 )}
 
-                {/* TAB 3: Performance Metrics & System Diagnostics Logs */}
                 {activeDashboardTab === 'stats' && (
+                  <Suspense fallback={<div className="feed-welcome-note">Loading analytics dashboard...</div>}>
+                    <PerformanceAnalytics token={authToken} />
+                  </Suspense>
+                )}
+
+                {/* Legacy diagnostics panel retained outside the rendered analytics tab. */}
+                {false && (
                   <>
                     <div className="dashboard-section-header">
                       <div>
