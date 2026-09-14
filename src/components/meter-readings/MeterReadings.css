@@ -1,0 +1,598 @@
+.meter-route {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.meter-view-tabs {
+  display: grid;
+  width: min(100%, 430px);
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card-hover);
+  padding: 4px;
+}
+
+.meter-view-tabs button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 9px 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.meter-view-tabs button.active {
+  background: var(--bg-card);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.meter-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meter-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.meter-header h2 {
+  margin: 4px 0;
+  color: var(--text-heading);
+  font-size: clamp(1.35rem, 3vw, 2rem);
+}
+
+.meter-header p,
+.meter-readonly-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.meter-eyebrow {
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.meter-date-control {
+  display: flex;
+  min-width: 180px;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.meter-date-control input,
+.meter-input-wrap {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-card);
+  color: var(--text-heading);
+}
+
+.meter-date-control input {
+  padding: 10px 12px;
+  color-scheme: light dark;
+}
+
+.meter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+  gap: 16px;
+}
+
+.meter-form-card,
+.meter-proof-card {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.meter-form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+
+.meter-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.meter-card-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.meter-card-heading span,
+.meter-field > span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.meter-card-heading strong {
+  color: var(--text-heading);
+}
+
+.meter-status {
+  padding: 5px 9px;
+  border-radius: 999px;
+}
+
+.meter-status.complete {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success);
+}
+
+.meter-status.pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+}
+
+.meter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meter-input-wrap {
+  display: flex;
+  align-items: center;
+  padding-right: 12px;
+}
+
+.meter-input-wrap input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 12px;
+  color: var(--text-heading);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.meter-input-wrap span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.meter-upload {
+  display: flex;
+  min-height: 110px;
+  cursor: pointer;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--text-heading);
+  text-align: center;
+}
+
+.meter-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.meter-upload span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.meter-upload.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.meter-submit {
+  border: 0;
+  border-radius: 9px;
+  background: var(--accent);
+  padding: 11px 16px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.meter-submit:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.meter-image-frame {
+  display: flex;
+  min-height: 300px;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card-hover);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.meter-image-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.meter-download {
+  display: block;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+
+.meter-download:hover {
+  background: var(--bg-card-hover);
+}
+
+.meter-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+
+.meter-details div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-card);
+  padding: 12px;
+}
+
+.meter-details span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.meter-details strong {
+  overflow: hidden;
+  color: var(--text-heading);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+}
+
+.meter-empty,
+.meter-empty-copy {
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.meter-empty-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 0;
+}
+
+.meter-empty-copy strong {
+  color: var(--text-heading);
+}
+
+.meter-alert {
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.meter-alert.error {
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--error);
+}
+
+.meter-alert.success {
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--success);
+}
+
+.meter-analytics {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.meter-analytics-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.meter-analytics-header h3 {
+  margin: 4px 0;
+  color: var(--text-heading);
+  font-size: 1.2rem;
+}
+
+.meter-analytics-header p,
+.meter-boundary-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.meter-range-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.meter-range-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.meter-range-form input {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 7px 9px;
+  color: var(--text-heading);
+  color-scheme: light dark;
+}
+
+.meter-range-form button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  padding: 8px 14px;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.meter-range-form button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.meter-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.meter-stat-grid div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 12px;
+}
+
+.meter-stat-grid span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.meter-stat-grid strong {
+  color: var(--text-heading);
+  font-size: 0.9rem;
+}
+
+.meter-chart-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
+  padding: 14px 10px 8px;
+}
+
+.meter-chart-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 6px;
+  color: var(--text-heading);
+}
+
+.meter-chart-card > div:first-child span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.meter-chart-card .recharts-text {
+  fill: var(--text-muted) !important;
+}
+
+.meter-chart-card .recharts-cartesian-axis-line,
+.meter-chart-card .recharts-cartesian-axis-tick-line {
+  stroke: var(--border);
+}
+
+.meter-chart-card .recharts-default-tooltip {
+  border-color: var(--border) !important;
+  background: var(--bg-card) !important;
+  color: var(--text-heading) !important;
+}
+
+.meter-chart-card .recharts-tooltip-label,
+.meter-chart-card .recharts-tooltip-item {
+  color: var(--text-heading) !important;
+}
+
+.meter-chart-card .recharts-tooltip-cursor {
+  fill: var(--bg-card-hover);
+  opacity: 0.65;
+}
+
+.meter-quality-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 9px;
+  background: rgba(245, 158, 11, 0.08);
+  padding: 11px 12px;
+  color: var(--text-heading);
+  font-size: 0.78rem;
+}
+
+.meter-quality-card span {
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .meter-route {
+    gap: 14px;
+  }
+
+  .meter-view-tabs {
+    position: sticky;
+    z-index: 2;
+    top: 6px;
+    width: 100%;
+  }
+
+  .meter-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .meter-date-control {
+    width: 100%;
+  }
+
+  .meter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meter-image-frame {
+    width: 100%;
+    height: clamp(180px, 58vw, 280px);
+    min-height: 0;
+    max-height: none;
+  }
+
+  .meter-image-frame img {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    object-fit: contain;
+  }
+
+  .meter-form-card {
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .meter-upload {
+    min-height: 84px;
+  }
+
+  .meter-submit {
+    min-height: 44px;
+  }
+
+  .meter-analytics-header,
+  .meter-range-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .meter-range-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .meter-range-form button {
+    grid-column: 1 / -1;
+  }
+
+  .meter-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .meter-stat-grid div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .meter-chart-card {
+    overflow-x: hidden;
+  }
+}
+
+@media (max-width: 420px) {
+  .meter-details {
+    grid-template-columns: 1fr;
+  }
+
+  .meter-header h2 {
+    font-size: 1.25rem;
+  }
+
+  .meter-card-heading {
+    align-items: flex-start;
+  }
+
+  .meter-range-form {
+    grid-template-columns: 1fr;
+  }
+
+  .meter-range-form button {
+    grid-column: auto;
+  }
+}

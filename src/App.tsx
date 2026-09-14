@@ -16,6 +16,7 @@ import {
   fetchExtensionPreview,
   type ExtensionPreviewResponse,
 } from './lib/sessionExtension';
+import { fetchMeterReading } from './lib/meterReadings';
 import {
   fetchSetupSessionStatus,
   type SetupSessionStatus,
@@ -23,6 +24,8 @@ import {
 import './App.css';
 
 const PerformanceAnalytics = lazy(() => import('./components/analytics/PerformanceAnalytics'));
+const MeterReadings = lazy(() => import('./components/meter-readings/MeterReadings'));
+const MeterAnalytics = lazy(() => import('./components/meter-readings/MeterAnalytics'));
 
 // Log item interface for platform updates feed
 interface LogItem {
@@ -49,10 +52,24 @@ interface SetupDetails {
   singlePlayerPrice?: number;
 }
 
+interface BookingCustomer {
+  name: string;
+  phoneNumber: string;
+  dateOfBirth: string | null;
+}
+
+interface BookingGame {
+  id: number;
+  name: string;
+}
+
 // Booking Details from API
 interface BookingDetails {
   bookingId: number;
   phoneNumber: string;
+  customerName?: string;
+  customer?: BookingCustomer;
+  games?: BookingGame[];
   playersCount: number;
   status: 'CONFIRMED' | 'PENDING' | string;
   startTime: string;
@@ -74,7 +91,7 @@ interface SetupInstance {
   currentBooking: BookingDetails | null;
 }
 
-type DashboardTab = 'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule';
+type DashboardTab = 'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule' | 'meter';
 
 const DASHBOARD_ROUTES: Record<DashboardTab, string> = {
   bookings: '#/dashboard/bookings',
@@ -82,6 +99,7 @@ const DASHBOARD_ROUTES: Record<DashboardTab, string> = {
   tentative: '#/dashboard/tentative',
   sessions: '#/dashboard/sessions',
   stats: '#/dashboard/stats',
+  meter: '#/dashboard/meter-readings',
 };
 
 function getDashboardTab(hash: string): DashboardTab {
@@ -99,6 +117,9 @@ function App() {
 
   // Dashboard Sub-navigation Tabs State
   const [activeDashboardTab, setActiveDashboardTab] = useState<DashboardTab>('bookings');
+  const [activeMeterView, setActiveMeterView] = useState<'reading' | 'analytics'>('reading');
+  const [isTodayMeterReadingMissing, setIsTodayMeterReadingMissing] = useState(false);
+  const [isMeterReminderDismissed, setIsMeterReminderDismissed] = useState(false);
 
   // Past Sessions date-filtered ledger
   const [pastSessionsDate, setPastSessionsDate] = useState<string>(() => {
@@ -485,6 +506,28 @@ function App() {
 
     return () => window.clearTimeout(timerId);
   }, [authToken, expireSession]);
+
+  useEffect(() => {
+    if (!authToken) {
+      setIsTodayMeterReadingMissing(false);
+      setIsMeterReminderDismissed(false);
+      return;
+    }
+
+    let active = true;
+    void fetchMeterReading(authToken)
+      .then((reading) => {
+        if (active) setIsTodayMeterReadingMissing(reading === null);
+      })
+      .catch(() => {
+        // A failed status check is not proof that today's task is incomplete.
+        if (active) setIsTodayMeterReadingMissing(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authToken]);
 
   // Dynamic Pricing: Fetch real-time rate & calculation from POST /api/price
   useEffect(() => {
@@ -2919,6 +2962,21 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                       <span className="sidebar-btn-label">Past Sessions & Revenue</span>
                     </button>
 
+                    <button
+                      className={`sidebar-btn ${activeDashboardTab === 'meter' ? 'active' : ''}`}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.meter)}
+                      title="Daily Meter Reading"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 13a8 8 0 1 1 16 0"></path>
+                        <path d="m12 13 3-3"></path>
+                        <path d="M5 19h14"></path>
+                      </svg>
+                      <span className="sidebar-btn-label">
+                        Meter Readings{isTodayMeterReadingMissing ? ' •' : ''}
+                      </span>
+                    </button>
+
                     <button 
                       className={`sidebar-btn ${activeDashboardTab === 'stats' ? 'active' : ''}`}
                       onClick={() => navigateTo(DASHBOARD_ROUTES.stats)}
@@ -3067,7 +3125,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                                       <div>
                                         <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Customer</div>
-                                        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-heading)', letterSpacing: '0.02em' }}>{inst.currentBooking.phoneNumber}</div>
+                                        <div className="occupancy-customer">
+                                          <strong>{inst.currentBooking.customerName || inst.currentBooking.customer?.name || 'Customer'}</strong>
+                                          <span>{inst.currentBooking.customer?.phoneNumber || inst.currentBooking.phoneNumber}</span>
+                                        </div>
                                       </div>
                                       <div style={{ textAlign: 'right' }}>
                                         <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2px' }}>Billed</div>
@@ -3092,6 +3153,17 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                         </span>
                                       )}
                                     </div>
+
+                                    {inst.currentBooking.games && inst.currentBooking.games.length > 0 && (
+                                      <div className="occupancy-games">
+                                        <span className="occupancy-games-label">Playing</span>
+                                        <div className="occupancy-game-list">
+                                          {inst.currentBooking.games.map((game) => (
+                                            <span className="occupancy-game-chip" key={game.id}>{game.name}</span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {(() => {
                                        const booking = inst.currentBooking;
@@ -4988,6 +5060,43 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </>
                 )}
 
+                {activeDashboardTab === 'meter' && authUser && (
+                  <Suspense fallback={<div className="feed-welcome-note">Loading meter readings...</div>}>
+                    <div className="meter-route">
+                      {authUser.role === 'SUPER_ADMIN' && (
+                        <div className="meter-view-tabs">
+                          <button
+                            type="button"
+                            className={activeMeterView === 'reading' ? 'active' : ''}
+                            onClick={() => setActiveMeterView('reading')}
+                          >
+                            Daily Reading
+                          </button>
+                          <button
+                            type="button"
+                            className={activeMeterView === 'analytics' ? 'active' : ''}
+                            onClick={() => setActiveMeterView('analytics')}
+                          >
+                            Consumption Analytics
+                          </button>
+                        </div>
+                      )}
+                      {activeMeterView === 'reading' || authUser.role !== 'SUPER_ADMIN' ? (
+                        <MeterReadings
+                          token={authToken}
+                          role={authUser.role}
+                          onTodayReadingCompleted={() => {
+                            setIsTodayMeterReadingMissing(false);
+                            setIsMeterReminderDismissed(true);
+                          }}
+                        />
+                      ) : (
+                        <MeterAnalytics token={authToken} />
+                      )}
+                    </div>
+                  </Suspense>
+                )}
+
                 {activeDashboardTab === 'stats' && (
                   <Suspense fallback={<div className="feed-welcome-note">Loading analytics dashboard...</div>}>
                     <PerformanceAnalytics token={authToken} />
@@ -5478,6 +5587,42 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           </button>
                         </div>
                       </form>
+                    </div>
+                  </div>
+                )}
+
+                {isTodayMeterReadingMissing && !isMeterReminderDismissed && activeDashboardTab !== 'meter' && (
+                  <div className="modal-overlay" onClick={() => setIsMeterReminderDismissed(true)}>
+                    <div className="modal-card" style={{ maxWidth: '440px' }} onClick={(event) => event.stopPropagation()}>
+                      <div className="modal-header">
+                        <div>
+                          <h3 className="modal-title">Today’s meter reading is pending</h3>
+                          <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                            Record the opening electricity meter value and upload a clear meter image.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="modal-body">
+                        <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '9px', background: 'var(--bg-card-hover)', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                          This task can be submitted once for the current IST calendar day.
+                        </div>
+                      </div>
+                      <div className="modal-footer">
+                        <button type="button" className="btn-card-action" onClick={() => setIsMeterReminderDismissed(true)}>
+                          Remind me later
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-card-action primary"
+                          onClick={() => {
+                            setIsMeterReminderDismissed(true);
+                            setActiveMeterView('reading');
+                            navigateTo(DASHBOARD_ROUTES.meter);
+                          }}
+                        >
+                          Record meter reading
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
