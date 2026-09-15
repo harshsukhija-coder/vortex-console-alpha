@@ -2,6 +2,8 @@ import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import OccupancySessionTimer from './components/occupancy/OccupancySessionTimer';
 import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
+import AddOnSelector from './components/add-ons/AddOnSelector';
+import NavbarProfile from './components/navigation/NavbarProfile';
 import { API_BASE_URL, assertSuccessfulJsonResponse } from './lib/api';
 import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
 import { formatSetupRatesShort, getSetupRateForPlayers } from './lib/setupRates';
@@ -18,7 +20,17 @@ import {
 } from './lib/sessionExtension';
 import { fetchMeterReading } from './lib/meterReadings';
 import {
+  attachBookingAddOns,
+  calculateAddOnsTotal,
+  fetchAvailableAddOns,
+  fetchBookingAddOns,
+  type AddOnCatalogItem,
+  type BookingAddOn,
+  type SelectedAddOn,
+} from './lib/bookingAddOns';
+import {
   fetchSetupSessionStatus,
+  type CheckoutPreview,
   type SetupSessionStatus,
 } from './lib/setupSession';
 import './App.css';
@@ -26,6 +38,7 @@ import './App.css';
 const PerformanceAnalytics = lazy(() => import('./components/analytics/PerformanceAnalytics'));
 const MeterReadings = lazy(() => import('./components/meter-readings/MeterReadings'));
 const MeterAnalytics = lazy(() => import('./components/meter-readings/MeterAnalytics'));
+const EvolutionPage = lazy(() => import('./components/evolution/EvolutionPage'));
 
 // Log item interface for platform updates feed
 interface LogItem {
@@ -355,23 +368,31 @@ function App() {
   const [isGamesLoading, setIsGamesLoading] = useState(false);
   const [, setCopiedPayload] = useState(false);
 
-  // Multi-step booking wizard states (7 steps: Phone → Customer Info → Members → Games → Slot Details → Review → Confirm)
-  const [bookingStep, setBookingStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7>(1);
+  // Multi-step booking wizard states
+  const [bookingStep, setBookingStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8>(1);
   const [bookingReview, setBookingReview] = useState<any>(null);
   const [, setBookingOffers] = useState<any[]>([]);
   const [applicableOffers, setApplicableOffers] = useState<any[]>([]);
   const [ineligibleOffers, setIneligibleOffers] = useState<any[]>([]);
   const [selectedOfferIds, setSelectedOfferIds] = useState<number[]>([]);
   const [isLoadingReview, setIsLoadingReview] = useState(false);
+  const [availableAddOns, setAvailableAddOns] = useState<AddOnCatalogItem[]>([]);
+  const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
+  const [isAddOnsLoading, setIsAddOnsLoading] = useState(false);
+  const [addOnsInstance, setAddOnsInstance] = useState<SetupInstance | null>(null);
+  const [bookingAddOns, setBookingAddOns] = useState<BookingAddOn[]>([]);
+  const [sessionAddOnsSelection, setSessionAddOnsSelection] = useState<SelectedAddOn[]>([]);
+  const [sessionAddOnsTotal, setSessionAddOnsTotal] = useState(0);
+  const [sessionAddOnsError, setSessionAddOnsError] = useState<string | null>(null);
+  const [sessionAddOnsMessage, setSessionAddOnsMessage] = useState<string | null>(null);
+  const [isSessionAddOnsLoading, setIsSessionAddOnsLoading] = useState(false);
+  const [isSessionAddOnsSubmitting, setIsSessionAddOnsSubmitting] = useState(false);
 
   // Custom End Session Module States
   const [terminatingInstance, setTerminatingInstance] = useState<SetupInstance | null>(null);
   const [terminateEndTime, setTerminateEndTime] = useState<string>('');
-  const [terminateElapsedMinutes, setTerminateElapsedMinutes] = useState<number>(0);
-  const [terminateChargedMinutes, setTerminateChargedMinutes] = useState<number>(0);
-  const [terminateOriginalAmount, setTerminateOriginalAmount] = useState<number>(0);
-  const [terminateDiscount, setTerminateDiscount] = useState<number>(0);
-  const [terminateFinalAmount, setTerminateFinalAmount] = useState<number>(0);
+  const [checkoutPreview, setCheckoutPreview] = useState<CheckoutPreview | null>(null);
+  const [isCheckoutPreviewLoading, setIsCheckoutPreviewLoading] = useState(false);
   const [terminateCashAmount, setTerminateCashAmount] = useState<number>(0);
   const [terminateUpiAmount, setTerminateUpiAmount] = useState<number>(0);
   const [terminateError, setTerminateError] = useState<string | null>(null);
@@ -406,6 +427,7 @@ function App() {
   const dismissedAlertsRef = useRef<Record<string, boolean>>({});
   const startedRefreshRef = useRef<Record<number, boolean>>({});
   const extensionPreviewRequestRef = useRef(0);
+  const checkoutPreviewRequestRef = useRef(0);
 
   // Booking extension states
   const [extendingSessionInstance, setExtendingSessionInstance] = useState<SetupInstance | null>(null);
@@ -522,6 +544,30 @@ function App() {
       .catch(() => {
         // A failed status check is not proof that today's task is incomplete.
         if (active) setIsTodayMeterReadingMissing(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken) {
+      setAvailableAddOns([]);
+      return;
+    }
+
+    let active = true;
+    setIsAddOnsLoading(true);
+    void fetchAvailableAddOns(authToken)
+      .then((items) => {
+        if (active) setAvailableAddOns(items);
+      })
+      .catch(() => {
+        if (active) setAvailableAddOns([]);
+      })
+      .finally(() => {
+        if (active) setIsAddOnsLoading(false);
       });
 
     return () => {
@@ -1405,6 +1451,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setBookingReview(null);
     setBookingOffers([]);
     setSelectedOfferIds([]);
+    setSelectedAddOns([]);
     // Reset customer info states
     setCustomerLookupDone(false);
     setIsLookingUpCustomer(false);
@@ -1621,7 +1668,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         endTime: calculateSlotEndTime(bookingTime, bookingHours),
         noOfHours: Number(bookingHours),
         gameIds: effectiveGameIds,
-        games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name }))
+        games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name })),
       }
     };
 
@@ -1729,10 +1776,13 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
       const selectedOffers = applicableOffers.filter((offer) => selectedOfferIds.includes(offer.id));
       const localDiscount = selectedOffers.reduce((total, offer) => total + Number(offer.discount || 0), 0);
+      const addOnsTotal = calculateAddOnsTotal(availableAddOns, selectedAddOns);
 
       setBookingReview((currentReview: any) => {
-        const reviewedOriginalAmount = reviewData.summary.originalAmount ?? currentReview.originalAmount;
+        const gameplayOriginalAmount = reviewData.summary.originalAmount ?? currentReview.originalAmount;
         const reviewedDiscount = reviewData.summary.discountApplied ?? localDiscount;
+        const gameplayTotalAmount = reviewData.summary.totalAmount
+          ?? Math.max(0, gameplayOriginalAmount - reviewedDiscount);
 
         return {
           ...currentReview,
@@ -1743,12 +1793,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             : (reviewData.summary.slotsFormatted ?? currentReview.slotsFormatted),
           selectedOffers: reviewData.summary.selectedOffers ?? selectedOffers,
           priceCalculationText: reviewData.summary.priceCalculationText ?? currentReview.priceCalculationText,
-          originalAmount: reviewedOriginalAmount,
+          gameplayOriginalAmount,
+          gameplayTotalAmount,
+          addOnsTotal,
+          addOns: selectedAddOns,
+          originalAmount: gameplayOriginalAmount + addOnsTotal,
           discountApplied: reviewedDiscount,
-          totalAmount: reviewData.summary.totalAmount ?? Math.max(0, reviewedOriginalAmount - reviewedDiscount)
+          totalAmount: gameplayTotalAmount + addOnsTotal,
         };
       });
-      setBookingStep(7);
+      setBookingStep(8);
     } catch (error) {
       setBookingFormError(error instanceof Error ? error.message : 'Failed to review booking.');
     } finally {
@@ -1799,7 +1853,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         endTime: calculateSlotEndTime(bookingTime, bookingHours),
         noOfHours: Number(bookingHours),
         gameIds: effectiveGameIds,
-        games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name }))
+        games: selectedGamesObjects.map((g) => ({ id: g.id, name: g.name })),
+        addOns: selectedAddOns,
       },
       pricing: {
         basePrice: slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours),
@@ -1810,9 +1865,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       offers: {
         ...(selectedOfferIds.length > 0 ? { appliedOfferIds: selectedOfferIds } : {}),
         appliedOffers: selectedOffersObjects,
-        originalAmount: bookingReview?.originalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
+        originalAmount: bookingReview?.gameplayOriginalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
         discountApplied: bookingReview?.discountApplied || 0,
-        totalAmount: bookingReview?.totalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours))
+        totalAmount: bookingReview?.gameplayTotalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours))
       }
     };
 
@@ -1871,69 +1926,76 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     }
   };
 
-  // Recalculate duration, rates, and discounts for termination modal
-  const updateTerminationCalculations = (
-    newEndTimeStr: string,
-    targetInst: SetupInstance | null = terminatingInstance
-  ) => {
-    if (!targetInst || !targetInst.currentBooking) return;
-    const booking = targetInst.currentBooking;
-    const startTimeDate = new Date(booking.startTime || Date.now());
-    const endDate = new Date(newEndTimeStr);
+  const applyCheckoutStatus = (instance: SetupInstance, status: SetupSessionStatus) => {
+    const preview = status.checkoutPreview;
+    if (!preview) {
+      throw new Error('The termination API did not return a checkout preview.');
+    }
 
-    if (isNaN(endDate.getTime())) return;
+    const previousSession = status.previousSession;
+    if (previousSession && instance.currentBooking) {
+      setTerminatingInstance({
+        ...instance,
+        currentBooking: {
+          ...instance.currentBooking,
+          bookingId: previousSession.bookingId,
+          phoneNumber: previousSession.customer?.phoneNumber ?? previousSession.phoneNumber,
+          customerName: previousSession.customer?.name,
+          customer: previousSession.customer
+            ? { ...previousSession.customer, dateOfBirth: null }
+            : instance.currentBooking.customer,
+          games: previousSession.games,
+          playersCount: previousSession.playersCount,
+          startTime: preview.timing.actualStartTime,
+        },
+      });
+    }
 
-    // Calculate actual elapsed minutes
-    const elapsed = Math.max(1, Math.round((endDate.getTime() - startTimeDate.getTime()) / (1000 * 60)));
-    // Standard gaming lounge rule: round up to nearest 15 minutes, minimum 15 mins
-    const charged = Math.max(15, Math.ceil(elapsed / 15) * 15);
-    const ratePerHour = getSetupRateForPlayers(targetInst.setup, booking.playersCount || 1) || 50;
-    const players = booking.playersCount || 1;
-    const basePrice = Math.round(ratePerHour * players * (charged / 60));
-
-    const discount = Math.max(
-      0,
-      Number(booking.originalAmount || 0) - Number(booking.amountCharged || 0),
-    );
-
-    const finalAmount = Math.max(0, basePrice - discount);
-
-    setTerminateElapsedMinutes(elapsed);
-    setTerminateChargedMinutes(charged);
-    setTerminateOriginalAmount(basePrice);
-    setTerminateDiscount(discount);
-    setTerminateFinalAmount(finalAmount);
-    setTerminateCashAmount(finalAmount);
-    setTerminateUpiAmount(0);
+    setCheckoutPreview(preview);
+    setTerminateEndTime(formatDateForDatetimeInput(new Date(preview.timing.proposedEndTime)));
+    setTerminateCashAmount(preview.settlement.cashAmount);
+    setTerminateUpiAmount(preview.settlement.upiAmount);
   };
 
-  // Open Custom End Session & Checkout Modal
-  const openTerminateModal = (inst: SetupInstance) => {
-    if (!inst.currentBooking) return;
-    setTerminatingInstance(inst);
+  const loadCheckoutPreview = async (
+    instance: SetupInstance,
+    endTime: string,
+    cashAmount?: number,
+    upiAmount?: number,
+  ) => {
+    const parsedEndTime = new Date(endTime);
+    if (Number.isNaN(parsedEndTime.getTime())) return;
+
+    const requestId = ++checkoutPreviewRequestRef.current;
+    setIsCheckoutPreviewLoading(true);
     setTerminateError(null);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const status = await fetchSetupSessionStatus(instance.instanceId, token, {
+        actualEndTime: parsedEndTime.toISOString(),
+        ...(cashAmount !== undefined ? { cashAmount } : {}),
+        ...(upiAmount !== undefined ? { upiAmount } : {}),
+      });
+      if (requestId !== checkoutPreviewRequestRef.current) return;
+      applyCheckoutStatus(instance, status);
+    } catch (error) {
+      if (requestId !== checkoutPreviewRequestRef.current) return;
+      setCheckoutPreview(null);
+      setTerminateError(error instanceof Error ? error.message : 'Could not load checkout details.');
+    } finally {
+      if (requestId === checkoutPreviewRequestRef.current) setIsCheckoutPreviewLoading(false);
+    }
+  };
 
-    const now = new Date();
-    const endTimeStr = formatDateForDatetimeInput(now);
-    setTerminateEndTime(endTimeStr);
-
-    const booking = inst.currentBooking;
-    const startTimeDate = new Date(booking.startTime || now);
-    const elapsed = Math.max(1, Math.round((now.getTime() - startTimeDate.getTime()) / (1000 * 60)));
-    const charged = Math.max(15, Math.ceil(elapsed / 15) * 15);
-    const ratePerHour = getSetupRateForPlayers(inst.setup, booking.playersCount || 1) || 50;
-    const players = booking.playersCount || 1;
-    const basePrice = Math.round(ratePerHour * players * (charged / 60));
-    const existingDiscount = Math.max(0, Number(booking.originalAmount || 0) - Number(booking.amountCharged || 0));
-    const finalAmount = Math.max(0, basePrice - existingDiscount);
-
-    setTerminateElapsedMinutes(elapsed);
-    setTerminateChargedMinutes(charged);
-    setTerminateOriginalAmount(basePrice);
-    setTerminateDiscount(existingDiscount);
-    setTerminateFinalAmount(finalAmount);
-    setTerminateCashAmount(finalAmount);
+  const openTerminateModal = (instance: SetupInstance) => {
+    if (!instance.currentBooking) return;
+    const endTime = formatDateForDatetimeInput(new Date());
+    setTerminatingInstance(instance);
+    setCheckoutPreview(null);
+    setTerminateEndTime(endTime);
+    setTerminateCashAmount(0);
     setTerminateUpiAmount(0);
+    void loadCheckoutPreview(instance, endTime);
   };
 
   function openPreviousSessionTerminationModal(
@@ -1941,7 +2003,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     status: SetupSessionStatus,
   ) {
     const previousSession = status.previousSession;
-    const sessionStartTime = previousSession?.actualStartTime ?? previousSession?.scheduledStartTime;
+    const sessionStartTime = status.checkoutPreview?.timing.actualStartTime
+      ?? previousSession?.actualStartTime
+      ?? previousSession?.scheduledStartTime;
     if (!previousSession || !sessionStartTime) {
       const message = 'The termination API did not return the previous session start time.';
       setOccupancyError(message);
@@ -1970,13 +2034,33 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       }
     };
 
-    openTerminateModal(syntheticInstance);
+    setTerminatingInstance(syntheticInstance);
+    try {
+      applyCheckoutStatus(syntheticInstance, status);
+    } catch {
+      openTerminateModal(syntheticInstance);
+    }
   }
 
-  // Handle End Time Adjustment in Modal
   const handleTerminateEndTimeChange = (val: string) => {
     setTerminateEndTime(val);
-    updateTerminationCalculations(val);
+    if (terminatingInstance) {
+      void loadCheckoutPreview(terminatingInstance, val, terminateCashAmount, terminateUpiAmount);
+    }
+  };
+
+  const handleTerminateCashChange = (cashAmount: number) => {
+    setTerminateCashAmount(cashAmount);
+    if (terminatingInstance) {
+      void loadCheckoutPreview(terminatingInstance, terminateEndTime, cashAmount, terminateUpiAmount);
+    }
+  };
+
+  const handleTerminateUpiChange = (upiAmount: number) => {
+    setTerminateUpiAmount(upiAmount);
+    if (terminatingInstance) {
+      void loadCheckoutPreview(terminatingInstance, terminateEndTime, terminateCashAmount, upiAmount);
+    }
   };
 
   // Submit Final Session Termination.
@@ -1991,15 +2075,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     const setupId = targetInst.instanceId;
     const bookingId = getBookingId(targetInst.currentBooking) || targetInst.currentBooking.bookingId;
     setTerminateError(null);
+    if (!checkoutPreview || isCheckoutPreviewLoading) {
+      setTerminateError('Wait for the checkout preview to finish updating.');
+      return;
+    }
     setIsTerminating(true);
 
     try {
       const token = authToken || localStorage.getItem('vortex_auth_token') || '';
-      const actualStartTime = new Date(targetInst.currentBooking.startTime);
-      const actualEndTime = terminateEndTime ? new Date(terminateEndTime) : new Date();
-      if (Number.isNaN(actualStartTime.getTime()) || Number.isNaN(actualEndTime.getTime())) {
-        throw new Error('The session start or end time is invalid.');
-      }
 
       const headers: HeadersInit = {
         'Content-Type': 'application/json'
@@ -2010,9 +2093,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          actualStartTime: actualStartTime.toISOString(),
-          actualEndTime: actualEndTime.toISOString(),
-          finalAmountCharged: Number(terminateFinalAmount) || 0,
+          actualStartTime: checkoutPreview.timing.actualStartTime,
+          actualEndTime: checkoutPreview.timing.proposedEndTime,
+          finalAmountCharged: checkoutPreview.settlement.totalPayable,
           cashAmount: Number(terminateCashAmount) || 0,
           upiAmount: Number(terminateUpiAmount) || 0
         })
@@ -2043,7 +2126,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           {
             id: `log-terminate-${Date.now()}`,
             type: 'success',
-            message: `Session Ended: Booking #${summary?.bookingId || bookingId} on ${targetInst.instanceName}. Elapsed: ${summary?.timing?.durationFormatted || `${terminateElapsedMinutes}m`}. Final: ₹${summary?.billing?.finalAmountCharged ?? terminateFinalAmount} (${settleMsg}). Station is now AVAILABLE.`,
+            message: `Session Ended: Booking #${summary?.bookingId || bookingId} on ${targetInst.instanceName}. Elapsed: ${summary?.timing?.durationFormatted || `${checkoutPreview.timing.elapsedMinutes}m`}. Final: ₹${summary?.billing?.finalAmountCharged ?? checkoutPreview.settlement.totalPayable} (${settleMsg}). Station is now AVAILABLE.`,
             timestamp: getTimestamp()
           }
         ]);
@@ -2453,6 +2536,66 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     openExtensionModal(instance, minutes);
   };
 
+  const openSessionAddOnsModal = async (instance: SetupInstance) => {
+    const bookingId = getBookingId(instance.currentBooking);
+    if (!bookingId) return;
+
+    setAddOnsInstance(instance);
+    setSessionAddOnsSelection([]);
+    setBookingAddOns([]);
+    setSessionAddOnsTotal(0);
+    setSessionAddOnsError(null);
+    setSessionAddOnsMessage(null);
+    setIsSessionAddOnsLoading(true);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const result = await fetchBookingAddOns(token, bookingId);
+      setBookingAddOns(result.addOns);
+      setSessionAddOnsTotal(result.addOnsTotal);
+    } catch (error) {
+      setSessionAddOnsError(error instanceof Error ? error.message : 'Could not load booking add-ons.');
+    } finally {
+      setIsSessionAddOnsLoading(false);
+    }
+  };
+
+  const handleAttachSessionAddOns = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const bookingId = getBookingId(addOnsInstance?.currentBooking);
+    if (!bookingId || sessionAddOnsSelection.length === 0) {
+      setSessionAddOnsError('Select at least one add-on.');
+      return;
+    }
+
+    setIsSessionAddOnsSubmitting(true);
+    setSessionAddOnsError(null);
+    setSessionAddOnsMessage(null);
+    try {
+      const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const result = await attachBookingAddOns(token, bookingId, sessionAddOnsSelection);
+      const current = await fetchBookingAddOns(token, bookingId);
+      setBookingAddOns(current.addOns);
+      setSessionAddOnsTotal(current.addOnsTotal);
+      setSessionAddOnsSelection([]);
+      setSessionAddOnsMessage(`${result.message}. ₹${result.addedTotal} added to this session.`);
+      setOccupancyData((instances) => instances.map((instance) => {
+        if (getBookingId(instance.currentBooking) !== bookingId || !instance.currentBooking) return instance;
+        return {
+          ...instance,
+          currentBooking: {
+            ...instance.currentBooking,
+            originalAmount: result.booking.originalAmount,
+            amountCharged: result.booking.amountCharged,
+          },
+        };
+      }));
+    } catch (error) {
+      setSessionAddOnsError(error instanceof Error ? error.message : 'Could not add items to this session.');
+    } finally {
+      setIsSessionAddOnsSubmitting(false);
+    }
+  };
+
   // Run Diagnostics Scan
   const handleDiagnosticsScan = () => {
     if (activeAction !== 'idle') return;
@@ -2580,22 +2723,24 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
           {/* Desktop Navigation */}
           <nav className="nav-desktop">
-            <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>HOME</a>
+            <div className="navbar-link-group">
+              <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>Home</a>
+              <a href="#/evolution" onClick={(e) => { e.preventDefault(); navigateTo('#/evolution'); }} className={`nav-link ${currentHash === '#/evolution' ? 'active' : ''}`}>Evolution</a>
+              {authToken && (
+                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>Control Center</a>
+              )}
+            </div>
             {authToken ? (
-              <>
-                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>CONTROL CENTER</a>
-                <div className="user-profile">
-                  <span className="user-email-text">{authUser?.email}</span>
-                  <span className={`user-role-badge ${authUser?.role.toLowerCase()}`}>
-                    {authUser?.role === 'SUPER_ADMIN' ? 'SUPER ADMIN' : 'ADMIN'}
-                  </span>
-                </div>
-                <button className="btn-signout-nav" onClick={handleLogout}>Sign Out</button>
-              </>
+              authUser && (
+                <NavbarProfile
+                  email={authUser.email}
+                  role={authUser.role}
+                  onOpenDashboard={() => navigateTo(DASHBOARD_ROUTES.bookings)}
+                  onSignOut={handleLogout}
+                />
+              )
             ) : (
-              <>
-                <button className="nav-btn" onClick={() => navigateTo('#/login')}>SIGN IN</button>
-              </>
+              <button className="nav-btn" onClick={() => navigateTo('#/login')}>Sign in</button>
             )}
           </nav>
 
@@ -2624,22 +2769,26 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
           {/* Mobile Overlay Menu */}
           <div className={`nav-mobile-menu ${isMenuOpen ? 'open' : ''}`} id="mobile-navigation">
-            <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>HOME</a>
+            <span className="navbar-mobile-label">Explore</span>
+            <div className="navbar-mobile-links">
+              <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className={`nav-link ${currentHash === '#/' ? 'active' : ''}`}>Home</a>
+              <a href="#/evolution" onClick={(e) => { e.preventDefault(); navigateTo('#/evolution'); }} className={`nav-link ${currentHash === '#/evolution' ? 'active' : ''}`}>Evolution</a>
+              {authToken && (
+                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>Control Center</a>
+              )}
+            </div>
             {authToken ? (
-              <>
-                <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className={`nav-link ${currentHash.startsWith('#/dashboard') ? 'active' : ''}`}>CONTROL CENTER</a>
-                <div className="user-profile" style={{ margin: '8px 0' }}>
-                  <span className="user-email-text">{authUser?.email}</span>
-                  <span className={`user-role-badge ${authUser?.role.toLowerCase()}`}>
-                    {authUser?.role === 'SUPER_ADMIN' ? 'SUPER ADMIN' : 'ADMIN'}
-                  </span>
-                </div>
-                <button className="nav-btn" style={{ background: '#ef4444', borderColor: '#ef4444' }} onClick={handleLogout}>Sign Out</button>
-              </>
+              authUser && (
+                <NavbarProfile
+                  email={authUser.email}
+                  role={authUser.role}
+                  onOpenDashboard={() => navigateTo(DASHBOARD_ROUTES.bookings)}
+                  onSignOut={handleLogout}
+                  mobile
+                />
+              )
             ) : (
-              <>
-                <button className="nav-btn" onClick={() => navigateTo('#/login')}>SIGN IN</button>
-              </>
+              <button className="nav-btn" onClick={() => navigateTo('#/login')}>Sign in</button>
             )}
           </div>
         </header>
@@ -2690,7 +2839,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   <div className="preview-mockup-content">
                     <div className="preview-metric-bar">
                       <div className="preview-metric-box">
-                        <div className="preview-metric-val">12</div>
+                        <div className="preview-metric-val">5</div>
                         <div className="preview-metric-lbl">Stations</div>
                       </div>
                       <div className="preview-metric-box">
@@ -2792,6 +2941,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                 </div>
               </section>
             </>
+          )}
+
+          {currentHash === '#/evolution' && (
+            <Suspense fallback={<div className="feed-welcome-note">Loading the Vortex story...</div>}>
+              <EvolutionPage />
+            </Suspense>
           )}
 
           {/* 2. Login Page Route */}
@@ -3230,6 +3385,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                          </button>
                                        </div>
 
+                                       {sessionIsOngoing && <button
+                                         type="button"
+                                         className="btn-card-action"
+                                         style={{ fontSize: '0.78rem', padding: '6px 10px' }}
+                                         onClick={(event) => {
+                                           event.stopPropagation();
+                                           void openSessionAddOnsModal(inst);
+                                         }}
+                                       >
+                                         + Add items
+                                       </button>}
+
                                        <button
                                          type="button"
                                          className="btn-card-action"
@@ -3327,7 +3494,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                       { num: 4, label: 'Games' },
                                       { num: 5, label: 'Slot' },
                                       { num: 6, label: 'Offers' },
-                                      { num: 7, label: 'Review' },
+                                      { num: 7, label: 'Add-ons' },
+                                      { num: 8, label: 'Review' },
                                     ] as const).map(({ num, label }) => (
                                       <div key={num} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                         <div style={{
@@ -3342,7 +3510,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                         <span style={{ fontSize: '0.62rem', color: bookingStep === num ? 'var(--text-heading)' : 'var(--text-muted)', fontWeight: bookingStep === num ? 600 : 400 }}>
                                           {label}
                                         </span>
-                                        {num < 7 && <div style={{ width: 8, height: 1, background: 'var(--border)' }} />}
+                                        {num < 8 && <div style={{ width: 8, height: 1, background: 'var(--border)' }} />}
                                       </div>
                                     ))}
                                   </div>
@@ -4284,16 +4452,43 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     </div>
                                     <div className="modal-footer">
                                       <button type="button" className="btn-card-action" onClick={() => { setBookingStep(5); setBookingFormError(null); }}>← Back</button>
-                                      <button type="button" className="btn-card-action primary" onClick={handleOpenFinalReview} disabled={isLoadingReview}>
-                                        {isLoadingReview ? 'Reviewing...' : 'Review Booking →'}
+                                      <button type="button" className="btn-card-action primary" onClick={() => setBookingStep(7)}>
+                                        Select Add-ons →
                                       </button>
                                     </div>
                                   </div>
                                 );
                               })()}
 
-                              {/* ── STEP 7: Final Review & Allot Booking (POST /api/bookings) ── */}
-                              {bookingStep === 7 && bookingReview && (() => {
+                              {/* STEP 7: Optional add-ons */}
+                              {bookingStep === 7 && bookingReview && (
+                                <div>
+                                  <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {bookingFormError && <div className="form-error-banner">{bookingFormError}</div>}
+                                    <div>
+                                      <h4 style={{ margin: '0 0 4px', color: 'var(--text-heading)' }}>Add items to this booking</h4>
+                                      <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                        Optional. Offers discount gameplay only. Add-ons retain their full price.
+                                      </p>
+                                    </div>
+                                    <AddOnSelector
+                                      items={availableAddOns}
+                                      selected={selectedAddOns}
+                                      isLoading={isAddOnsLoading}
+                                      onChange={setSelectedAddOns}
+                                    />
+                                  </div>
+                                  <div className="modal-footer">
+                                    <button type="button" className="btn-card-action" onClick={() => setBookingStep(6)}>← Back</button>
+                                    <button type="button" className="btn-card-action primary" onClick={handleOpenFinalReview} disabled={isLoadingReview}>
+                                      {isLoadingReview ? 'Reviewing...' : 'Review Booking →'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* STEP 8: Final Review & Allot Booking */}
+                              {bookingStep === 8 && bookingReview && (() => {
                                 const selectedGamesObjects = availableGames.filter((g) => selectedGameIds.includes(g.id));
                                 const selectedOffersObjects = applicableOffers
                                   .filter((o) => selectedOfferIds.includes(o.id))
@@ -4470,6 +4665,29 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                           </div>
                                         )}
 
+                                        {selectedAddOns.length > 0 && (
+                                          <div className="review-card">
+                                            <div className="review-card-header">
+                                              <div className="review-card-title">
+                                                <span>＋</span>
+                                                <span>Add-ons ({selectedAddOns.reduce((total, item) => total + item.units, 0)} items)</span>
+                                              </div>
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                              {selectedAddOns.map((selection) => {
+                                                const addOn = availableAddOns.find((item) => item.id === selection.addOnId);
+                                                if (!addOn) return null;
+                                                return (
+                                                  <div key={selection.addOnId} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                                    <span>{addOn.itemName} × {selection.units}</span>
+                                                    <strong style={{ color: 'var(--text-heading)' }}>₹{addOn.price * selection.units}</strong>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                        )}
+
                                         {/* Card 4: Rate Breakdown & Applied Promotions */}
                                         <div className="review-card">
                                           <div className="review-card-header">
@@ -4510,13 +4728,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                           {/* Total Ledger */}
                                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                                              <span>Original Subtotal</span>
-                                              <span>₹{bookingReview.originalAmount}</span>
+                                              <span>Gameplay Subtotal</span>
+                                              <span>₹{bookingReview.gameplayOriginalAmount ?? bookingReview.originalAmount}</span>
                                             </div>
                                             {bookingReview.discountApplied > 0 && (
                                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--success)', fontWeight: 600 }}>
                                                 <span>Promotional Discount</span>
                                                 <span>−₹{bookingReview.discountApplied}</span>
+                                              </div>
+                                            )}
+                                            {bookingReview.addOnsTotal > 0 && (
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                                <span>Add-ons</span>
+                                                <span>+₹{bookingReview.addOnsTotal}</span>
                                               </div>
                                             )}
                                             <div className="review-total-banner" style={{ marginTop: '6px' }}>
@@ -4534,7 +4758,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     </div>
 
                                     <div className="modal-footer">
-                                      <button type="button" className="btn-card-action" onClick={() => setBookingStep(6)} disabled={isBookingSubmitting}>← Back</button>
+                                      <button type="button" className="btn-card-action" onClick={() => setBookingStep(7)} disabled={isBookingSubmitting}>← Back</button>
                                       <button type="submit" className="btn-card-action primary" disabled={isBookingSubmitting} style={{ padding: '8px 20px', fontWeight: 700 }}>
                                         {isBookingSubmitting ? 'Allotting Slot...' : `Confirm & Allot Slot (₹${bookingReview.totalAmount}) ➔`}
                                       </button>
@@ -5627,6 +5851,70 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </div>
                 )}
 
+                {addOnsInstance?.currentBooking && (
+                  <div className="modal-overlay" onClick={() => !isSessionAddOnsSubmitting && setAddOnsInstance(null)}>
+                    <div className="modal-card" style={{ maxWidth: '600px' }} onClick={(event) => event.stopPropagation()}>
+                      <div className="modal-header">
+                        <div>
+                          <h3 className="modal-title">Add Items to Active Session</h3>
+                          <p style={{ margin: '3px 0 0', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                            {addOnsInstance.instanceName} · Booking #{getBookingId(addOnsInstance.currentBooking)}
+                          </p>
+                        </div>
+                        <button className="modal-close-btn" onClick={() => !isSessionAddOnsSubmitting && setAddOnsInstance(null)}>
+                          <span aria-hidden="true">×</span>
+                        </button>
+                      </div>
+                      <form onSubmit={handleAttachSessionAddOns}>
+                        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          {sessionAddOnsError && <div className="form-error-banner">{sessionAddOnsError}</div>}
+                          {sessionAddOnsMessage && <div className="session-addon-success">{sessionAddOnsMessage}</div>}
+
+                          {isSessionAddOnsLoading ? (
+                            <div className="addon-empty">Loading current add-ons...</div>
+                          ) : (
+                            <>
+                              {bookingAddOns.length > 0 && (
+                                <div className="review-card">
+                                  <div className="review-card-header">
+                                    <div className="review-card-title">Current add-ons</div>
+                                    <strong style={{ color: 'var(--accent)' }}>₹{sessionAddOnsTotal}</strong>
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    {bookingAddOns.map((item, index) => (
+                                      <div key={`${item.itemName}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                        <span>{item.itemName} · {item.itemQuantity} {item.quantityUnit} × {item.units}</span>
+                                        <strong style={{ color: 'var(--text-heading)' }}>₹{item.lineTotal}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div>
+                                <h4 style={{ margin: '0 0 8px', color: 'var(--text-heading)' }}>Add more items</h4>
+                                <AddOnSelector
+                                  items={availableAddOns}
+                                  selected={sessionAddOnsSelection}
+                                  isLoading={isAddOnsLoading}
+                                  disabled={isSessionAddOnsSubmitting}
+                                  onChange={setSessionAddOnsSelection}
+                                />
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        <div className="modal-footer">
+                          <button type="button" className="btn-card-action" onClick={() => setAddOnsInstance(null)} disabled={isSessionAddOnsSubmitting}>Close</button>
+                          <button type="submit" className="btn-card-action primary" disabled={isSessionAddOnsSubmitting || sessionAddOnsSelection.length === 0}>
+                            {isSessionAddOnsSubmitting ? 'Adding items...' : `Add to session · ₹${calculateAddOnsTotal(availableAddOns, sessionAddOnsSelection)}`}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
                 {/* Extend Active Session Modal Overlay */}
                 {extendingSessionInstance && extendingSessionInstance.currentBooking && (
                   <div className="modal-overlay" onClick={() => !isExtensionSubmitting && setExtendingSessionInstance(null)}>
@@ -5990,7 +6278,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div>
                                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Customer Contact</span>
-                                <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-heading)' }}>{terminatingInstance.currentBooking.phoneNumber}</div>
+                                <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-heading)' }}>
+                                  {terminatingInstance.currentBooking.customerName || terminatingInstance.currentBooking.customer?.name || 'Customer'}
+                                </div>
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{terminatingInstance.currentBooking.phoneNumber}</div>
                               </div>
                               <div style={{ textAlign: 'right' }}>
                                 <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Players</span>
@@ -5998,10 +6289,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               </div>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: '6px' }}>
-                              <span>Started At: <strong style={{ color: 'var(--text-heading)' }}>{formatTimeStr(terminatingInstance.currentBooking.startTime)}</strong></span>
-                              <span>Initial Rate: <strong>₹{terminatingInstance.currentBooking.amountCharged}</strong></span>
+                              <span>Started At: <strong style={{ color: 'var(--text-heading)' }}>{checkoutPreview ? formatTimeStr(checkoutPreview.timing.actualStartTime) : 'Loading...'}</strong></span>
+                              <span>Initial Gameplay: <strong>₹{checkoutPreview?.gameplay.initialAmount ?? '...'}</strong></span>
                             </div>
                           </div>
+
+                          {isCheckoutPreviewLoading && (
+                            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                              Updating checkout from server...
+                            </div>
+                          )}
 
                           {/* Adjust End Time */}
                           <div className="form-group" style={{ marginTop: '4px' }}>
@@ -6025,21 +6322,36 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             />
                           </div>
 
-                          {/* Calculated Duration & Pro-Rated Base Price */}
+                          {/* Server-calculated duration and gameplay price */}
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', padding: '10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', textAlign: 'center' }}>
                             <div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Actual Elapsed</div>
-                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>{terminateElapsedMinutes}m</div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>{checkoutPreview?.timing.elapsedMinutes ?? 0}m</div>
                             </div>
                             <div style={{ borderLeft: '1px solid var(--border)', borderRight: '1px solid var(--border)' }}>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Billed Time</div>
-                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--accent)', marginTop: '2px' }}>{terminateChargedMinutes}m <span style={{ fontSize: '0.72rem', fontWeight: 500 }}>({(terminateChargedMinutes / 60).toFixed(2)}h)</span></div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--accent)', marginTop: '2px' }}>{checkoutPreview?.timing.billedMinutes ?? 0}m <span style={{ fontSize: '0.72rem', fontWeight: 500 }}>({checkoutPreview?.timing.billedHours ?? 0}h)</span></div>
                             </div>
                             <div>
-                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Pro-Rated Base</div>
-                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>₹{terminateOriginalAmount}</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Gameplay</div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>₹{checkoutPreview?.gameplay.amountAfterOffers ?? 0}</div>
                             </div>
                           </div>
+
+                          {checkoutPreview && checkoutPreview.addOns.items.length > 0 && (
+                            <div className="review-card">
+                              <div className="review-card-header">
+                                <div className="review-card-title">Add-ons</div>
+                                <strong style={{ color: 'var(--accent)' }}>₹{checkoutPreview.addOns.total}</strong>
+                              </div>
+                              {checkoutPreview.addOns.items.map((item, index) => (
+                                <div key={`${item.itemName}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                                  <span>{item.itemName} × {item.units}</span>
+                                  <span>₹{item.lineTotal}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
 
                           {/* Settlement & Split Payment Recording */}
                           <div style={{ background: 'var(--bg-card-hover)', border: '1px solid var(--accent)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -6047,11 +6359,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               <div>
                                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Total Payable</div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                  Base ₹{terminateOriginalAmount} {terminateDiscount > 0 && <span style={{ color: 'var(--success)' }}>− ₹{terminateDiscount} discount</span>}
+                                  {checkoutPreview?.settlement.calculationFormula ?? 'Loading server calculation...'}
                                 </div>
                               </div>
                               <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--accent)' }}>
-                                ₹{terminateFinalAmount}
+                                ₹{checkoutPreview?.settlement.totalPayable ?? 0}
                               </div>
                             </div>
 
@@ -6063,7 +6375,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   id="terminate-cash"
                                   className="form-input"
                                   value={terminateCashAmount}
-                                  onChange={(e) => setTerminateCashAmount(Number(e.target.value))}
+                                  onChange={(e) => handleTerminateCashChange(Number(e.target.value))}
                                   min={0}
                                   required
                                 />
@@ -6075,19 +6387,21 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   id="terminate-upi"
                                   className="form-input"
                                   value={terminateUpiAmount}
-                                  onChange={(e) => setTerminateUpiAmount(Number(e.target.value))}
+                                  onChange={(e) => handleTerminateUpiChange(Number(e.target.value))}
                                   min={0}
                                   required
                                 />
                               </div>
                             </div>
 
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: (terminateCashAmount + terminateUpiAmount) === terminateFinalAmount ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
-                              <span>Payment Recorded: ₹{terminateCashAmount + terminateUpiAmount}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: checkoutPreview?.settlement.exactBalance ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+                              <span>Payment Recorded: ₹{checkoutPreview?.settlement.paymentRecorded ?? 0}</span>
                               <span>
-                                {(terminateCashAmount + terminateUpiAmount) === terminateFinalAmount
+                                {checkoutPreview?.settlement.exactBalance
                                   ? '✓ Exact Balance'
-                                  : `Diff: ₹${(terminateCashAmount + terminateUpiAmount) - terminateFinalAmount}`}
+                                  : checkoutPreview?.settlement.paymentDue
+                                    ? `Due: ₹${checkoutPreview.settlement.paymentDue}`
+                                    : `Refund: ₹${checkoutPreview?.settlement.refundDue ?? 0}`}
                               </span>
                             </div>
                           </div>
@@ -6107,7 +6421,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             type="submit" 
                             className="btn-card-action"
                             style={{ background: 'var(--error)', color: 'white', borderColor: 'var(--error)' }}
-                            disabled={isTerminating}
+                            disabled={isTerminating || isCheckoutPreviewLoading || !checkoutPreview}
                           >
                             {isTerminating ? 'Finalizing Checkout...' : '⏹ Finalize & End Session'}
                           </button>
@@ -6193,6 +6507,26 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           </div>
                         </div>
 
+                        {sessionSummaryResult.addOns?.items?.length > 0 && (
+                          <div className="review-card">
+                            <div className="review-card-header">
+                              <div className="review-card-title">
+                                <span>＋</span>
+                                <span>Add-ons</span>
+                              </div>
+                              <strong style={{ color: 'var(--accent)' }}>₹{sessionSummaryResult.addOns.total}</strong>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                              {sessionSummaryResult.addOns.items.map((item: BookingAddOn, index: number) => (
+                                <div key={`${item.itemName}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.76rem' }}>
+                                  <span>{item.itemName} · {item.itemQuantity} {item.quantityUnit} × {item.units}</span>
+                                  <strong style={{ color: 'var(--text-heading)' }}>₹{item.lineTotal}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* 2. Timing & Duration Breakdown Card */}
                         <div className="review-card">
                           <div className="review-card-header">
@@ -6267,8 +6601,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           )}
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', borderTop: '1px solid var(--border)', paddingTop: '6px', marginTop: '2px' }}>
+                            {sessionSummaryResult.billing?.gameplayAmountAfterOffers !== undefined && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                <span>Gameplay after offers</span>
+                                <span>₹{sessionSummaryResult.billing.gameplayAmountAfterOffers}</span>
+                              </div>
+                            )}
+                            {sessionSummaryResult.billing?.addOnsTotal > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                <span>Add-ons</span>
+                                <span>₹{sessionSummaryResult.billing.addOnsTotal}</span>
+                              </div>
+                            )}
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                              <span>Base Subtotal</span>
+                              <span>Original Total</span>
                               <span>₹{sessionSummaryResult.billing?.originalAmount}</span>
                             </div>
                             {sessionSummaryResult.billing?.discountApplied > 0 && (
@@ -6534,6 +6880,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             <div className="footer-logo">VORTEX PLATFORM OPERATIONS</div>
             <div className="footer-links">
               <a href="#/" onClick={(e) => { e.preventDefault(); navigateTo('#/'); }} className="footer-link">Home</a>
+              <a href="#/evolution" onClick={(e) => { e.preventDefault(); navigateTo('#/evolution'); }} className="footer-link">Evolution</a>
               {authToken && (
                 <a href={DASHBOARD_ROUTES.bookings} onClick={(e) => { e.preventDefault(); navigateTo(DASHBOARD_ROUTES.bookings); }} className="footer-link">Control Center</a>
               )}
@@ -6550,7 +6897,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
               </div>
               <div className="footer-meta-item">
                 <span>Operational Nodes:</span>
-                <span style={{ color: 'var(--success)', fontWeight: '600' }}>14 Active Regions</span>
+                <span style={{ color: 'var(--success)', fontWeight: '600' }}>1 Active Regions</span>
               </div>
             </div>
           </div>

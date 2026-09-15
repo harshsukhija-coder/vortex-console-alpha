@@ -1,0 +1,134 @@
+.addon-selector {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.addon-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.addon-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  padding: 9px;
+}
+
+.addon-item.selected {
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.addon-image {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  background: var(--bg-card-hover);
+  object-fit: cover;
+}
+
+.addon-image.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.addon-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.addon-copy strong {
+  overflow: hidden;
+  color: var(--text-heading);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.addon-copy span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.addon-counter {
+  display: grid;
+  grid-template-columns: 28px 24px 28px;
+  align-items: center;
+  text-align: center;
+}
+
+.addon-counter button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-card-hover);
+  color: var(--text-heading);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.addon-counter button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.addon-counter span {
+  color: var(--text-heading);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.addon-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.addon-total strong {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.addon-empty {
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .addon-list {
+    grid-template-columns: 1fr;
+  }
+
+  .addon-item {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    padding: 8px;
+  }
+
+  .addon-image {
+    width: 38px;
+    height: 38px;
+  }
+}

@@ -11,6 +11,71 @@ export interface PreviousSession {
   actualEndTime: string | null;
   originalAmount?: number;
   amountCharged?: number;
+  customer?: {
+    name: string;
+    phoneNumber: string;
+  };
+  games?: Array<{
+    id: number;
+    name: string;
+  }>;
+}
+
+export interface CheckoutPreview {
+  setupPricing: {
+    singlePlayerPrice: number;
+    multiplayerPrice: number;
+    ratePerPersonPerHour: number;
+    playerType: string;
+  };
+  timing: {
+    actualStartTime: string;
+    proposedEndTime: string;
+    elapsedMinutes: number;
+    billedMinutes: number;
+    billedHours: number;
+  };
+  gameplay: {
+    initialAmount: number;
+    originalAmount: number;
+    discountApplied: number;
+    amountAfterOffers: number;
+  };
+  addOns: {
+    items: Array<{
+      addOnId: number;
+      itemName: string;
+      unitPrice: number;
+      itemQuantity: number;
+      quantityUnit: string;
+      units: number;
+      lineTotal: number;
+    }>;
+    total: number;
+  };
+  settlement: {
+    calculatedAmountCharged: number;
+    totalPayable: number;
+    calculationFormula: string;
+    cashAmount: number;
+    upiAmount: number;
+    paymentRecorded: number;
+    paymentDue: number;
+    refundDue: number;
+    exactBalance: boolean;
+    status: string;
+  };
+  appliedOffers: Array<{
+    id: number;
+    code: string;
+    discount: number;
+  }>;
+}
+
+export interface CheckoutPreviewParams {
+  actualEndTime?: string;
+  cashAmount?: number;
+  upiAmount?: number;
 }
 
 export interface SetupSessionStatus {
@@ -26,6 +91,7 @@ export interface SetupSessionStatus {
   requiresTermination: boolean;
   canTerminate: boolean;
   previousSession?: PreviousSession;
+  checkoutPreview?: CheckoutPreview;
 }
 
 export interface TerminatedSessionSummary {
@@ -63,9 +129,15 @@ function getAuthorizationHeaders(token: string): HeadersInit {
 export async function fetchSetupSessionStatus(
   setupInstanceId: number,
   token: string,
+  preview?: CheckoutPreviewParams,
 ): Promise<SetupSessionStatus> {
+  const params = new URLSearchParams();
+  if (preview?.actualEndTime) params.set('actualEndTime', preview.actualEndTime);
+  if (preview?.cashAmount !== undefined) params.set('cashAmount', String(preview.cashAmount));
+  if (preview?.upiAmount !== undefined) params.set('upiAmount', String(preview.upiAmount));
+  const query = params.size > 0 ? `?${params}` : '';
   const response = await fetch(
-    `${API_BASE_URL}/api/setup-instances/${setupInstanceId}/terminate-session`,
+    `${API_BASE_URL}/api/setup-instances/${setupInstanceId}/terminate-session${query}`,
     { headers: getAuthorizationHeaders(token) },
   );
   await assertSuccessfulJsonResponse(response);
