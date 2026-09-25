@@ -1,0 +1,2 @@
+export const METER_READING_REMINDER_ENABLED =
+  import.meta.env.VITE_METER_READING_REMINDER_ENABLED !== 'false';

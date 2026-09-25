@@ -19,6 +19,7 @@ import {
   type ExtensionPreviewResponse,
 } from './lib/sessionExtension';
 import { fetchMeterReading } from './lib/meterReadings';
+import { METER_READING_REMINDER_ENABLED } from './lib/config';
 import {
   attachBookingAddOns,
   calculateAddOnsTotal,
@@ -530,7 +531,7 @@ function App() {
   }, [authToken, expireSession]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!METER_READING_REMINDER_ENABLED || !authToken) {
       setIsTodayMeterReadingMissing(false);
       setIsMeterReminderDismissed(false);
       return;
@@ -3128,7 +3129,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <path d="M5 19h14"></path>
                       </svg>
                       <span className="sidebar-btn-label">
-                        Meter Readings{isTodayMeterReadingMissing ? ' •' : ''}
+                        Meter Readings{METER_READING_REMINDER_ENABLED && isTodayMeterReadingMissing ? ' •' : ''}
                       </span>
                     </button>
 
@@ -5815,7 +5816,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </div>
                 )}
 
-                {isTodayMeterReadingMissing && !isMeterReminderDismissed && activeDashboardTab !== 'meter' && (
+                {METER_READING_REMINDER_ENABLED && isTodayMeterReadingMissing && !isMeterReminderDismissed && activeDashboardTab !== 'meter' && (
                   <div className="modal-overlay" onClick={() => setIsMeterReminderDismissed(true)}>
                     <div className="modal-card" style={{ maxWidth: '440px' }} onClick={(event) => event.stopPropagation()}>
                       <div className="modal-header">
