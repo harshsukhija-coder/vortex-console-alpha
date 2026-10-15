@@ -4,7 +4,9 @@ import SetupRatePills from './components/occupancy/SetupRatePills';
 import UpcomingScheduleList from './components/schedule/UpcomingScheduleList';
 import AddOnSelector from './components/add-ons/AddOnSelector';
 import NavbarProfile from './components/navigation/NavbarProfile';
+import CouponRedeemer from './components/coupons/CouponRedeemer';
 import { API_BASE_URL, assertSuccessfulJsonResponse } from './lib/api';
+import { CouponApiError, evaluateCoupons, type CouponPreview } from './lib/coupons';
 import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
 import { formatSetupRatesShort, getSetupRateForPlayers } from './lib/setupRates';
 import {
@@ -40,6 +42,7 @@ const PerformanceAnalytics = lazy(() => import('./components/analytics/Performan
 const MeterReadings = lazy(() => import('./components/meter-readings/MeterReadings'));
 const MeterAnalytics = lazy(() => import('./components/meter-readings/MeterAnalytics'));
 const EvolutionPage = lazy(() => import('./components/evolution/EvolutionPage'));
+const VisitApprovals = lazy(() => import('./components/visit-approvals/VisitApprovals'));
 
 // Log item interface for platform updates feed
 interface LogItem {
@@ -105,7 +108,7 @@ interface SetupInstance {
   currentBooking: BookingDetails | null;
 }
 
-type DashboardTab = 'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule' | 'meter';
+type DashboardTab = 'stats' | 'tentative' | 'bookings' | 'sessions' | 'schedule' | 'meter' | 'approvals';
 
 const DASHBOARD_ROUTES: Record<DashboardTab, string> = {
   bookings: '#/dashboard/bookings',
@@ -114,6 +117,7 @@ const DASHBOARD_ROUTES: Record<DashboardTab, string> = {
   sessions: '#/dashboard/sessions',
   stats: '#/dashboard/stats',
   meter: '#/dashboard/meter-readings',
+  approvals: '#/dashboard/visit-approvals',
 };
 
 function getDashboardTab(hash: string): DashboardTab {
@@ -376,6 +380,11 @@ function App() {
   const [applicableOffers, setApplicableOffers] = useState<any[]>([]);
   const [ineligibleOffers, setIneligibleOffers] = useState<any[]>([]);
   const [selectedOfferIds, setSelectedOfferIds] = useState<number[]>([]);
+  const [appliedCoupons, setAppliedCoupons] = useState<string[]>([]);
+  const [couponPreview, setCouponPreview] = useState<CouponPreview | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [isCouponChecking, setIsCouponChecking] = useState(false);
+  const couponRequestRef = useRef(0);
   const [isLoadingReview, setIsLoadingReview] = useState(false);
   const [availableAddOns, setAvailableAddOns] = useState<AddOnCatalogItem[]>([]);
   const [selectedAddOns, setSelectedAddOns] = useState<SelectedAddOn[]>([]);
@@ -1439,6 +1448,102 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setBookingTime(`${updated.hour}:${updated.minute} ${updated.period}`);
   };
 
+  // ---- Coupon codes (admin / super admin) ----
+  const resetCoupons = () => {
+    couponRequestRef.current += 1;
+    setAppliedCoupons([]);
+    setCouponPreview(null);
+    setCouponError(null);
+    setIsCouponChecking(false);
+  };
+
+  // Same booking shape the offer evaluation already uses; couponCodes/appliedOfferIds are added by the API helper.
+  const buildEvaluationPayload = () => {
+    if (!selectedInstanceForBooking) return null;
+    const effectiveGameIds = selectedGameIds.length > 0
+      ? selectedGameIds
+      : (availableGames.length > 0 ? [availableGames[0].id] : [1]);
+    return {
+      setupInstanceId: selectedInstanceForBooking.instanceId,
+      setupName: selectedInstanceForBooking.instanceName,
+      consoleType: selectedInstanceForBooking.setup?.consoleType || 'PS5',
+      customer: {
+        name: customerName,
+        phoneNumber: bookingPhone,
+        dateOfBirth: customerDob || null,
+      },
+      additionalMembers: additionalMembers.filter((m) => m.name || m.phone).map((m) => ({
+        name: m.name,
+        phone: m.phone,
+        dateOfBirth: m.dateOfBirth || null,
+      })),
+      bookingDetails: {
+        playersCount: Number(bookingPlayers),
+        date: bookingDate,
+        startTime: bookingTime,
+        endTime: calculateSlotEndTime(bookingTime, bookingHours),
+        noOfHours: Number(bookingHours),
+        gameIds: effectiveGameIds,
+      },
+    };
+  };
+
+  const fetchCouponPreview = (codes: string[], offerIds: number[]) => {
+    const payload = buildEvaluationPayload();
+    if (!payload) return Promise.reject(new Error('Select a station before applying coupons.'));
+    const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+    return evaluateCoupons(token, payload, codes, offerIds);
+  };
+
+  // Validates codes and prices them against the offers currently selected. Later calls supersede earlier ones.
+  const refreshCouponPreview = async (codes: string[], offerIds: number[]): Promise<boolean> => {
+    const requestId = ++couponRequestRef.current;
+    setIsCouponChecking(true);
+    setCouponError(null);
+    try {
+      const preview = await fetchCouponPreview(codes, offerIds);
+      if (requestId !== couponRequestRef.current) return false;
+      setCouponPreview(preview);
+      return true;
+    } catch (error) {
+      if (requestId !== couponRequestRef.current) return false;
+      if (error instanceof CouponApiError && error.status === 401) {
+        expireSession();
+        return false;
+      }
+      setCouponError(error instanceof Error ? error.message : 'Could not verify the coupon.');
+      return false;
+    } finally {
+      if (requestId === couponRequestRef.current) setIsCouponChecking(false);
+    }
+  };
+
+  const applyCoupon = async (code: string): Promise<boolean> => {
+    const next = [...appliedCoupons, code];
+    const accepted = await refreshCouponPreview(next, selectedOfferIds);
+    if (accepted) setAppliedCoupons(next);
+    return accepted;
+  };
+
+  const removeCoupon = (code: string) => {
+    const next = appliedCoupons.filter((existing) => existing !== code);
+    if (next.length === 0) {
+      resetCoupons();
+      return;
+    }
+    setAppliedCoupons(next);
+    void refreshCouponPreview(next, selectedOfferIds);
+  };
+
+  // A coupon is worth one player's share of gameplay *after* offers, so its value changes with the offer selection.
+  const toggleOffer = (offerId: number, checked: boolean) => {
+    const next = checked
+      ? [...selectedOfferIds, offerId]
+      : selectedOfferIds.filter((id) => id !== offerId);
+    setSelectedOfferIds(next);
+    if (appliedCoupons.length > 0) void refreshCouponPreview(appliedCoupons, next);
+  };
+
   // Trigger Booking Allocator Modal overlay
   const openBookingModal = async (instance: SetupInstance) => {
     setSelectedInstanceForBooking(instance);
@@ -1452,6 +1557,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setBookingReview(null);
     setBookingOffers([]);
     setSelectedOfferIds([]);
+    resetCoupons();
     setSelectedAddOns([]);
     // Reset customer info states
     setCustomerLookupDone(false);
@@ -1698,6 +1804,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         setIneligibleOffers([]);
       }
       setSelectedOfferIds([]);
+      resetCoupons();
 
       const playersCount = Number(bookingPlayers);
       const durationHours = Number(bookingHours);
@@ -1779,11 +1886,24 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const localDiscount = selectedOffers.reduce((total, offer) => total + Number(offer.discount || 0), 0);
       const addOnsTotal = calculateAddOnsTotal(availableAddOns, selectedAddOns);
 
+      // Re-verify coupons right before the final review so used/expired codes are caught early,
+      // and take the gameplay pricing straight from the API.
+      const couponSummary = appliedCoupons.length > 0
+        ? await fetchCouponPreview(appliedCoupons, selectedOfferIds)
+        : null;
+
       setBookingReview((currentReview: any) => {
-        const gameplayOriginalAmount = reviewData.summary.originalAmount ?? currentReview.originalAmount;
-        const reviewedDiscount = reviewData.summary.discountApplied ?? localDiscount;
-        const gameplayTotalAmount = reviewData.summary.totalAmount
-          ?? Math.max(0, gameplayOriginalAmount - reviewedDiscount);
+        const gameplayOriginalAmount = couponSummary?.originalAmount
+          ?? reviewData.summary.originalAmount
+          ?? currentReview.originalAmount;
+        const offerDiscount = couponSummary
+          ? couponSummary.offerDiscount
+          : (reviewData.summary.discountApplied ?? localDiscount);
+        const couponDiscount = couponSummary?.couponDiscount ?? 0;
+        const reviewedDiscount = offerDiscount + couponDiscount;
+        const gameplayTotalAmount = couponSummary
+          ? couponSummary.totalAmount
+          : (reviewData.summary.totalAmount ?? Math.max(0, gameplayOriginalAmount - reviewedDiscount));
 
         return {
           ...currentReview,
@@ -1798,6 +1918,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
           gameplayTotalAmount,
           addOnsTotal,
           addOns: selectedAddOns,
+          offerDiscount,
+          couponDiscount,
+          couponCodes: couponSummary ? appliedCoupons : [],
           originalAmount: gameplayOriginalAmount + addOnsTotal,
           discountApplied: reviewedDiscount,
           totalAmount: gameplayTotalAmount + addOnsTotal,
@@ -1805,6 +1928,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       });
       setBookingStep(8);
     } catch (error) {
+      if (error instanceof CouponApiError && error.status === 401) {
+        expireSession();
+        return;
+      }
       setBookingFormError(error instanceof Error ? error.message : 'Failed to review booking.');
     } finally {
       setIsLoadingReview(false);
@@ -1830,6 +1957,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         discount: o.discount,
         reason: o.reason
       }));
+
+    const hasCoupons = appliedCoupons.length > 0;
+    const offerOnlyDiscount = bookingReview?.offerDiscount ?? bookingReview?.discountApplied ?? 0;
 
     const finalBookingPayload = {
       setupInstanceId: selectedInstanceForBooking.instanceId,
@@ -1867,9 +1997,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         ...(selectedOfferIds.length > 0 ? { appliedOfferIds: selectedOfferIds } : {}),
         appliedOffers: selectedOffersObjects,
         originalAmount: bookingReview?.gameplayOriginalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
-        discountApplied: bookingReview?.discountApplied || 0,
-        totalAmount: bookingReview?.gameplayTotalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours))
-      }
+        // The offers block describes offers only; coupons are sent separately and priced by the API.
+        discountApplied: hasCoupons ? offerOnlyDiscount : (bookingReview?.discountApplied || 0),
+        totalAmount: hasCoupons
+          ? Math.max(0, (bookingReview?.gameplayOriginalAmount ?? 0) - offerOnlyDiscount)
+          : (bookingReview?.gameplayTotalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)))
+      },
+      // Codes are redeemed together with the booking; payment defaults to the discounted total.
+      ...(hasCoupons ? { couponCodes: appliedCoupons } : {})
     };
 
     try {
@@ -1909,7 +2044,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         {
           id: `log-booking-${Date.now()}`,
           type: 'success',
-          message: `Booking #${data.booking?.id || ''} confirmed successfully for ${customerName} (${bookingPhone}) on ${selectedInstanceForBooking.instanceName}. Total: ₹${data.booking?.pricing?.totalAmount ?? bookingReview?.totalAmount}.`,
+          message: `Booking #${data.booking?.id || ''} confirmed successfully for ${customerName} (${bookingPhone}) on ${selectedInstanceForBooking.instanceName}. Total: ₹${data.booking?.pricing?.totalAmount ?? bookingReview?.totalAmount}${Array.isArray(data.booking?.coupons) && data.booking.coupons.length > 0 ? ` (${data.booking.coupons.length} coupon${data.booking.coupons.length === 1 ? '' : 's'} redeemed)` : ''}.`,
           timestamp: getTimestamp()
         }
       ]);
@@ -1917,6 +2052,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       setSelectedInstanceForBooking(null);
       setBookingStep(1);
       setBookingReview(null);
+      resetCoupons();
       fetchOccupancyData();
       fetchScheduleData(true);
       fetchTentativeBookings(tentativeDate);
@@ -3131,6 +3267,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                       <span className="sidebar-btn-label">
                         Meter Readings{METER_READING_REMINDER_ENABLED && isTodayMeterReadingMissing ? ' •' : ''}
                       </span>
+                    </button>
+
+                    <button
+                      className={`sidebar-btn ${activeDashboardTab === 'approvals' ? 'active' : ''}`}
+                      onClick={() => navigateTo(DASHBOARD_ROUTES.approvals)}
+                      title="Visit Approvals"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                      </svg>
+                      <span className="sidebar-btn-label">Visit Approvals</span>
                     </button>
 
                     <button 
@@ -4376,10 +4524,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                         <input
                                                           type="checkbox"
                                                           checked={isChecked}
-                                                          onChange={(e) => {
-                                                            if (e.target.checked) setSelectedOfferIds((prev) => [...prev, offer.id]);
-                                                            else setSelectedOfferIds((prev) => prev.filter((id) => id !== offer.id));
-                                                          }}
+                                                          // Handler only runs on click; the coupon request ref is never read during render.
+                                                          // eslint-disable-next-line react-hooks/refs
+                                                          onChange={(e) => toggleOffer(offer.id, e.target.checked)}
                                                           style={{ accentColor: 'var(--success)', width: 16, height: 16, cursor: 'pointer' }}
                                                         />
                                                         <div>
@@ -4450,10 +4597,21 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                           </div>
                                         )}
                                       </div>
+
+                                      <CouponRedeemer
+                                        codes={appliedCoupons}
+                                        maxAllowed={couponPreview?.maxAllowed ?? bookingReview.playersCount}
+                                        couponDiscount={couponPreview?.couponDiscount ?? 0}
+                                        isChecking={isCouponChecking}
+                                        error={couponError}
+                                        onApply={applyCoupon}
+                                        onRemove={removeCoupon}
+                                        onDismissError={() => setCouponError(null)}
+                                      />
                                     </div>
                                     <div className="modal-footer">
                                       <button type="button" className="btn-card-action" onClick={() => { setBookingStep(5); setBookingFormError(null); }}>← Back</button>
-                                      <button type="button" className="btn-card-action primary" onClick={() => setBookingStep(7)}>
+                                      <button type="button" className="btn-card-action primary" onClick={() => setBookingStep(7)} disabled={isCouponChecking}>
                                         Select Add-ons →
                                       </button>
                                     </div>
@@ -4552,6 +4710,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                             <circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>
                                           </svg>
                                           <span>{bookingFormError}</span>
+                                          {/coupon/i.test(bookingFormError) && (
+                                            <button
+                                              type="button"
+                                              className="btn-card-action"
+                                              onClick={() => { setBookingFormError(null); setBookingStep(6); }}
+                                              disabled={isBookingSubmitting}
+                                            >
+                                              Edit coupons
+                                            </button>
+                                          )}
                                           {bookingSessionStatus?.requiresTermination && (
                                             <button
                                               type="button"
@@ -4720,9 +4888,29 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                 </div>
                                               ))}
                                             </div>
-                                          ) : (
+                                          ) : appliedCoupons.length === 0 ? (
                                             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontStyle: 'italic', marginTop: '2px' }}>
                                               No promotional discounts applied.
+                                            </div>
+                                          ) : null}
+
+                                          {/* Redeemed coupons */}
+                                          {appliedCoupons.length > 0 && (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+                                              {appliedCoupons.map((code) => (
+                                                <div key={code} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: 'rgba(16, 185, 129, 0.08)', borderRadius: '6px', border: '1px dashed rgba(16, 185, 129, 0.4)' }}>
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    <span style={{ fontSize: '0.8rem' }}>🎟️</span>
+                                                    <div>
+                                                      <div style={{ fontWeight: 800, fontSize: '0.76rem', color: 'var(--text-heading)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>{code}</div>
+                                                      <div style={{ fontSize: '0.68rem', color: 'var(--success)' }}>Covers one player&apos;s gameplay · redeemed on confirm</div>
+                                                    </div>
+                                                  </div>
+                                                  <span style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--success)' }}>
+                                                    −₹{Math.round((bookingReview.couponDiscount ?? 0) / appliedCoupons.length)}
+                                                  </span>
+                                                </div>
+                                              ))}
                                             </div>
                                           )}
 
@@ -4732,10 +4920,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                               <span>Gameplay Subtotal</span>
                                               <span>₹{bookingReview.gameplayOriginalAmount ?? bookingReview.originalAmount}</span>
                                             </div>
-                                            {bookingReview.discountApplied > 0 && (
+                                            {(bookingReview.offerDiscount ?? bookingReview.discountApplied) > 0 && (
                                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--success)', fontWeight: 600 }}>
                                                 <span>Promotional Discount</span>
-                                                <span>−₹{bookingReview.discountApplied}</span>
+                                                <span>−₹{bookingReview.offerDiscount ?? bookingReview.discountApplied}</span>
+                                              </div>
+                                            )}
+                                            {bookingReview.couponDiscount > 0 && (
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--success)', fontWeight: 600 }}>
+                                                <span>Coupon Discount ({appliedCoupons.length})</span>
+                                                <span>−₹{bookingReview.couponDiscount}</span>
                                               </div>
                                             )}
                                             {bookingReview.addOnsTotal > 0 && (
@@ -5319,6 +5513,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                         <MeterAnalytics token={authToken} />
                       )}
                     </div>
+                  </Suspense>
+                )}
+
+                {activeDashboardTab === 'approvals' && authUser && authToken && (
+                  <Suspense fallback={<div className="feed-welcome-note">Loading visit approvals...</div>}>
+                    <VisitApprovals
+                      token={authToken}
+                      role={authUser.role}
+                      onUnauthorized={() => expireSession()}
+                    />
                   </Suspense>
                 )}
 

@@ -1,0 +1,1118 @@
+.va-page {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---------- Header ---------- */
+.va-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.va-header-copy {
+  min-width: 0;
+}
+
+.va-header h2 {
+  margin: 4px 0;
+  color: var(--text-heading);
+  font-size: clamp(1.35rem, 3vw, 2rem);
+}
+
+.va-header p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.va-eyebrow {
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.va-role-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border-accent-dim);
+  border-radius: 999px;
+  background: var(--accent-light);
+  padding: 6px 12px;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---------- Toolbar ---------- */
+.va-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.va-segmented {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-card-hover);
+  padding: 4px;
+}
+
+.va-segmented button {
+  min-width: 92px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.va-segmented button:hover:not(.active) {
+  color: var(--text-heading);
+}
+
+.va-segmented button.active {
+  background: var(--bg-card);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.va-search {
+  display: flex;
+  min-width: 220px;
+  max-width: 340px;
+  flex: 1 1 240px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-card);
+  padding: 0 12px;
+  color: var(--text-muted);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.va-search:focus-within {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.va-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 11px 0;
+  color: var(--text-heading);
+  font: inherit;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.va-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.va-search-clear {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.va-search-clear svg {
+  width: 12px;
+  height: 12px;
+}
+
+.va-search-clear:hover {
+  color: var(--text-heading);
+}
+
+.va-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-card);
+  padding: 10px 15px;
+  color: var(--text-heading);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  box-shadow: var(--shadow-sm);
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.va-refresh:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+.va-refresh:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.va-refresh:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.va-refresh span {
+  display: inline-flex;
+}
+
+.va-spin {
+  animation: va-rotate 0.9s linear infinite;
+}
+
+/* ---------- Banner ---------- */
+.va-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: 11px;
+  background: var(--danger-light);
+  padding: 11px 14px;
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.va-banner svg {
+  flex-shrink: 0;
+}
+
+.va-banner span {
+  flex: 1;
+}
+
+.va-banner button {
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: transparent;
+  padding: 5px 11px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.va-banner button:hover {
+  background: var(--danger-light);
+}
+
+/* ---------- List ---------- */
+.va-list-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.va-list-head,
+.va-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 2.2fr) minmax(150px, 1.4fr) minmax(110px, 1fr) minmax(130px, 1.1fr) minmax(190px, auto);
+  align-items: center;
+  gap: 16px;
+  padding-inline: 20px;
+}
+
+.va-list-head {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+  padding-block: 11px;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.va-head-actions {
+  text-align: right;
+}
+
+.va-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.va-row {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  padding-block: 14px;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+  animation: va-row-in 0.28s ease both;
+}
+
+.va-row:last-child {
+  border-bottom: 0;
+}
+
+.va-row:hover {
+  background: var(--surface-subtle);
+}
+
+.va-row.is-busy {
+  opacity: 0.75;
+}
+
+.va-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.va-cell > svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.va-customer {
+  gap: 12px;
+}
+
+.va-avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid hsl(var(--va-hue) 70% 55% / 0.35);
+  border-radius: 12px;
+  background: hsl(var(--va-hue) 70% 55% / 0.16);
+  color: hsl(var(--va-hue) 75% 64%);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.light-theme .va-avatar {
+  color: hsl(var(--va-hue) 70% 30%);
+}
+
+.va-customer-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.va-customer-text strong {
+  overflow: hidden;
+  color: var(--text-heading);
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.va-customer-text span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.va-customer-text span svg {
+  width: 11px;
+  height: 11px;
+}
+
+.va-date span {
+  color: var(--text-heading);
+  font-weight: 600;
+}
+
+.va-today {
+  border-radius: 999px;
+  background: var(--accent-light);
+  padding: 2px 8px;
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.va-requested span {
+  color: var(--text);
+}
+
+.va-status-cell {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.va-status-cell small {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.va-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.va-pill svg {
+  width: 12px;
+  height: 12px;
+}
+
+.va-pill.pending {
+  border-color: var(--warning-border);
+  background: var(--warning-light);
+  color: var(--warning);
+}
+
+.va-pill.approved {
+  border-color: var(--success-border);
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.va-pill.rewarded {
+  border-color: var(--border-accent-dim);
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.va-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: va-pulse 1.8s ease-in-out infinite;
+}
+
+/* ---------- Buttons ---------- */
+.va-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.va-locked {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.va-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.va-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.va-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.va-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.va-btn:focus-visible,
+.va-segmented button:focus-visible,
+.va-refresh:focus-visible,
+.va-pagination button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.va-btn.approve {
+  background: var(--success);
+  color: #fff;
+  box-shadow: 0 4px 12px -4px var(--success);
+}
+
+.va-btn.approve:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.va-btn.reject {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.va-btn.reject:hover:not(:disabled) {
+  border-color: var(--danger-border);
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.va-btn.danger {
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 4px 12px -4px var(--danger);
+}
+
+.va-btn.danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.va-btn.ghost {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-heading);
+}
+
+.va-btn.ghost:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+}
+
+.va-btn-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: va-rotate 0.7s linear infinite;
+}
+
+.va-link-btn {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.va-link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Skeleton / Empty ---------- */
+.va-skeleton-row {
+  display: block;
+  padding-block: 12px;
+  animation: none;
+}
+
+.va-skeleton-row:hover {
+  background: transparent;
+}
+
+.va-skeleton-block {
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-subtle) 0%,
+    var(--surface-hover) 50%,
+    var(--surface-subtle) 100%
+  );
+  background-size: 200% 100%;
+  animation: va-shimmer 1.3s ease-in-out infinite;
+}
+
+.va-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.va-empty-icon {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  place-items: center;
+  margin-bottom: 14px;
+  border: 1px solid var(--border-accent-dim);
+  border-radius: 18px;
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.va-empty-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.va-empty strong {
+  color: var(--text-heading);
+  font-size: 1rem;
+}
+
+.va-empty p {
+  max-width: 40ch;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.83rem;
+  line-height: 1.5;
+}
+
+/* ---------- Pagination ---------- */
+.va-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+  padding: 12px 20px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.va-pagination div {
+  display: flex;
+  gap: 8px;
+}
+
+.va-pagination button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  padding: 6px 13px;
+  color: var(--text-heading);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.va-pagination button:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+.va-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ---------- Dialogs ---------- */
+.va-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: var(--overlay);
+  padding: 20px;
+  backdrop-filter: blur(6px);
+  animation: va-fade 0.18s ease both;
+}
+
+.va-dialog {
+  position: relative;
+  display: flex;
+  width: min(100%, 420px);
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-card);
+  padding: 28px 26px 24px;
+  text-align: center;
+  box-shadow: var(--shadow-lg), 0 30px 80px -30px rgba(0, 0, 0, 0.6);
+  animation: va-pop 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.va-dialog h3 {
+  margin: 4px 0 8px;
+  color: var(--text-heading);
+  font-size: 1.15rem;
+}
+
+.va-dialog p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.va-dialog p strong {
+  color: var(--text-heading);
+}
+
+.va-dialog-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  margin-bottom: 12px;
+  border-radius: 16px;
+}
+
+.va-dialog-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.va-dialog-icon.danger {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.va-dialog-icon.gift {
+  background: linear-gradient(135deg, var(--accent), #ec4899);
+  color: #fff;
+  box-shadow: 0 10px 28px -8px var(--accent);
+}
+
+.va-dialog-actions {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.va-dialog-actions .va-btn {
+  min-width: 120px;
+  padding: 10px 16px;
+  font-size: 0.82rem;
+}
+
+.va-dialog.reward {
+  width: min(100%, 440px);
+}
+
+.va-code-box {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+  border: 1.5px dashed var(--border-accent);
+  border-radius: 14px;
+  background: var(--accent-light);
+  padding: 12px 12px 12px 18px;
+}
+
+.va-code-box code {
+  color: var(--text-heading);
+  font-family: var(--font-mono);
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.va-code-box button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-accent-dim);
+  border-radius: 9px;
+  background: var(--bg-card);
+  padding: 7px 12px;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.va-code-box button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.va-code-box button.copied {
+  border-color: var(--success-border);
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.va-code-meta {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.va-code-meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-subtle);
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.va-code-meta span {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.va-code-meta strong {
+  color: var(--text-heading);
+  font-size: 0.82rem;
+}
+
+.va-confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.va-confetti i {
+  position: absolute;
+  top: -10px;
+  left: calc(var(--i) * 7.4% + 2%);
+  width: 7px;
+  height: 12px;
+  border-radius: 2px;
+  background: hsl(calc(var(--i) * 47), 85%, 62%);
+  opacity: 0;
+  animation: va-fall 1.9s ease-out calc(var(--i) * 0.07s) both;
+}
+
+/* ---------- Toasts ---------- */
+.va-toasts {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 1100;
+  display: flex;
+  width: min(380px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.va-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 13px;
+  background: var(--bg-card);
+  padding: 12px 12px 12px 13px;
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  animation: va-toast-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.1) both;
+}
+
+.va-toast.success {
+  border-left-color: var(--success);
+}
+
+.va-toast.error {
+  border-left-color: var(--danger);
+}
+
+.va-toast.info {
+  border-left-color: var(--accent);
+}
+
+.va-toast-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.va-toast-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.va-toast.success .va-toast-icon {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.va-toast.error .va-toast-icon {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.va-toast.info .va-toast-icon {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.va-toast > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.va-toast strong {
+  display: block;
+  color: var(--text-heading);
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.va-toast p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.va-toast > button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.va-toast > button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.va-toast > button:hover {
+  background: var(--surface-hover);
+  color: var(--text-heading);
+}
+
+/* ---------- Animations ---------- */
+@keyframes va-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes va-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes va-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes va-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes va-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes va-pop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.94);
+  }
+}
+
+@keyframes va-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes va-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(280px) rotate(540deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .va-row,
+  .va-dialog,
+  .va-overlay,
+  .va-toast,
+  .va-dot,
+  .va-spin,
+  .va-skeleton-block {
+    animation: none;
+  }
+
+  .va-confetti {
+    display: none;
+  }
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1100px) {
+  .va-list-head {
+    display: none;
+  }
+
+  .va-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 16px;
+    padding: 16px;
+  }
+
+  .va-customer,
+  .va-actions {
+    grid-column: 1 / -1;
+  }
+
+  .va-actions {
+    justify-content: stretch;
+    border-top: 1px dashed var(--border);
+    padding-top: 12px;
+  }
+
+  .va-actions .va-btn {
+    flex: 1;
+    padding-block: 10px;
+  }
+
+  .va-locked {
+    width: 100%;
+    text-align: right;
+  }
+
+  .va-status-cell {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .va-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .va-segmented {
+    width: 100%;
+  }
+
+  .va-segmented button {
+    min-width: 0;
+  }
+
+  .va-search {
+    max-width: none;
+    flex: 1 1 100%;
+  }
+
+  .va-refresh {
+    width: 100%;
+    justify-content: center;
+    margin-left: 0;
+  }
+
+  .va-row {
+    grid-template-columns: 1fr;
+  }
+
+  .va-toasts {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .va-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .va-code-box code {
+    font-size: 1.05rem;
+  }
+}
