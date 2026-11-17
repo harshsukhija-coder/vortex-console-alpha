@@ -16,10 +16,16 @@ export interface ExtensionPreview {
   totalDurationHours: number;
   pricing: {
     ratePerPersonPerHour: number;
+    /** Console × players × total hours after the extension. */
+    setupPrice?: number;
+    /** Flat game premiums — unchanged on extend. */
+    gamesTotal?: number;
+    games?: Array<{ id: number; name: string; price: number }>;
     originalAmount: number;
     discountApplied: number;
     totalAmount: number;
     previousTotalAmount: number;
+    /** Setup-hours delta only; game premium is not re-charged. */
     additionalAmountToPay: number;
   };
   appliedOffers: ExtensionOffer[];

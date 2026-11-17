@@ -6,7 +6,7 @@ import AddOnSelector from './components/add-ons/AddOnSelector';
 import NavbarProfile from './components/navigation/NavbarProfile';
 import CouponRedeemer from './components/coupons/CouponRedeemer';
 import { API_BASE_URL, assertSuccessfulJsonResponse } from './lib/api';
-import { CouponApiError, evaluateCoupons, type CouponPreview } from './lib/coupons';
+import { CouponApiError, evaluateCoupons, parseBookingSummary, type CouponPreview } from './lib/coupons';
 import { getTokenExpiryMs, isAuthTokenExpired, isUnauthorizedResponse } from './lib/auth';
 import { formatSetupRatesShort, getSetupRateForPlayers } from './lib/setupRates';
 import {
@@ -1527,21 +1527,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
   const removeCoupon = (code: string) => {
     const next = appliedCoupons.filter((existing) => existing !== code);
-    if (next.length === 0) {
-      resetCoupons();
-      return;
-    }
     setAppliedCoupons(next);
+    // Empty codes still re-evaluate so setup/game totals stay in sync with selected offers.
     void refreshCouponPreview(next, selectedOfferIds);
   };
 
-  // A coupon is worth one player's share of gameplay *after* offers, so its value changes with the offer selection.
+  // Coupons discount setup only; offer changes reprice both setup and the coupon share.
   const toggleOffer = (offerId: number, checked: boolean) => {
     const next = checked
       ? [...selectedOfferIds, offerId]
       : selectedOfferIds.filter((id) => id !== offerId);
     setSelectedOfferIds(next);
-    if (appliedCoupons.length > 0) void refreshCouponPreview(appliedCoupons, next);
+    void refreshCouponPreview(appliedCoupons, next);
   };
 
   // Trigger Booking Allocator Modal overlay
@@ -1781,13 +1778,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
 
     try {
       // Fetch offer eligibility using the actual booking payload.
+      // Explicit empty appliedOfferIds so the API does not auto-apply an offer the operator has not selected.
       const offerRes = await fetch(`${API_BASE_URL}/api/offers/evaluate/actual`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`,
         },
-        body: JSON.stringify(fullEvaluationPayload)
+        body: JSON.stringify({ ...fullEvaluationPayload, appliedOfferIds: [], couponCodes: [] })
       });
       await assertSuccessfulJsonResponse(offerRes);
       const offerData = await offerRes.json();
@@ -1809,7 +1807,22 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const playersCount = Number(bookingPlayers);
       const durationHours = Number(bookingHours);
       const ratePerPersonPerHour = getSetupRateForPlayers(selectedInstanceForBooking.setup, playersCount);
-      const originalAmount = ratePerPersonPerHour * playersCount * durationHours;
+      const pricePreview = parseBookingSummary(
+        (offerData.bookingSummary ?? {}) as Record<string, unknown>,
+        [],
+        offerData.coupons,
+      );
+      const setupPrice = pricePreview.setupPrice
+        || (ratePerPersonPerHour * playersCount * durationHours);
+      const gamesTotal = pricePreview.gamesTotal;
+      const pricedGames = pricePreview.games.length > 0
+        ? pricePreview.games
+        : selectedGamesObjects.map((g) => ({
+            id: g.id,
+            name: g.name,
+            price: Number(g.price) || 0,
+          }));
+      const originalAmount = pricePreview.originalAmount || (setupPrice + gamesTotal);
       const formattedDate = new Date(`${bookingDate}T00:00:00`).toLocaleDateString('en-GB', {
         weekday: 'long',
         day: '2-digit',
@@ -1817,6 +1830,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         year: 'numeric'
       });
 
+      setCouponPreview(pricePreview);
       setBookingReview({
         setup: {
           setupInstanceId: selectedInstanceForBooking.instanceId,
@@ -1834,9 +1848,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         playersCount,
         durationHours,
         games: selectedGamesObjects,
+        pricedGames,
         selectedOffers: [],
-        priceCalculationText: `₹${ratePerPersonPerHour} × ${playersCount} players × ${durationHours} ${durationHours === 1 ? 'hour' : 'hours'} = ₹${originalAmount}`,
+        setupPrice,
+        gamesTotal,
+        priceCalculationText: `Setup ₹${setupPrice} + games ₹${gamesTotal} = ₹${originalAmount}`,
+        gameplayOriginalAmount: setupPrice,
+        gameplayTotalAmount: setupPrice,
         originalAmount,
+        offerDiscount: 0,
+        couponDiscount: 0,
         discountApplied: 0,
         totalAmount: originalAmount
       });
@@ -1886,24 +1907,25 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
       const localDiscount = selectedOffers.reduce((total, offer) => total + Number(offer.discount || 0), 0);
       const addOnsTotal = calculateAddOnsTotal(availableAddOns, selectedAddOns);
 
-      // Re-verify coupons right before the final review so used/expired codes are caught early,
-      // and take the gameplay pricing straight from the API.
-      const couponSummary = appliedCoupons.length > 0
-        ? await fetchCouponPreview(appliedCoupons, selectedOfferIds)
-        : null;
+      // Always re-evaluate so setupPrice + flat game premiums stay authoritative.
+      const priceSummary = await fetchCouponPreview(appliedCoupons, selectedOfferIds);
+      setCouponPreview(priceSummary);
 
       setBookingReview((currentReview: any) => {
-        const gameplayOriginalAmount = couponSummary?.originalAmount
+        const setupPrice = priceSummary.setupPrice
+          ?? currentReview.setupPrice
           ?? reviewData.summary.originalAmount
           ?? currentReview.originalAmount;
-        const offerDiscount = couponSummary
-          ? couponSummary.offerDiscount
-          : (reviewData.summary.discountApplied ?? localDiscount);
-        const couponDiscount = couponSummary?.couponDiscount ?? 0;
+        const gamesTotal = priceSummary.gamesTotal ?? currentReview.gamesTotal ?? 0;
+        const pricedGames = priceSummary.games.length > 0
+          ? priceSummary.games
+          : (currentReview.pricedGames ?? []);
+        const offerDiscount = priceSummary.offerDiscount
+          || (reviewData.summary.discountApplied ?? localDiscount);
+        const couponDiscount = priceSummary.couponDiscount ?? 0;
         const reviewedDiscount = offerDiscount + couponDiscount;
-        const gameplayTotalAmount = couponSummary
-          ? couponSummary.totalAmount
-          : (reviewData.summary.totalAmount ?? Math.max(0, gameplayOriginalAmount - reviewedDiscount));
+        const gameplayTotalAmount = Math.max(0, setupPrice - reviewedDiscount);
+        const billableTotal = priceSummary.totalAmount + addOnsTotal;
 
         return {
           ...currentReview,
@@ -1913,17 +1935,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             ? reviewData.summary.slots.join(', ')
             : (reviewData.summary.slotsFormatted ?? currentReview.slotsFormatted),
           selectedOffers: reviewData.summary.selectedOffers ?? selectedOffers,
-          priceCalculationText: reviewData.summary.priceCalculationText ?? currentReview.priceCalculationText,
-          gameplayOriginalAmount,
+          priceCalculationText: `Setup ₹${setupPrice} + games ₹${gamesTotal} = ₹${setupPrice + gamesTotal}`,
+          setupPrice,
+          gamesTotal,
+          pricedGames,
+          gameplayOriginalAmount: setupPrice,
           gameplayTotalAmount,
           addOnsTotal,
           addOns: selectedAddOns,
           offerDiscount,
           couponDiscount,
-          couponCodes: couponSummary ? appliedCoupons : [],
-          originalAmount: gameplayOriginalAmount + addOnsTotal,
+          couponCodes: appliedCoupons,
+          originalAmount: setupPrice + gamesTotal + addOnsTotal,
           discountApplied: reviewedDiscount,
-          totalAmount: gameplayTotalAmount + addOnsTotal,
+          totalAmount: billableTotal,
         };
       });
       setBookingStep(8);
@@ -1988,20 +2013,32 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         addOns: selectedAddOns,
       },
       pricing: {
+        setupPrice: bookingReview?.setupPrice
+          ?? (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
+        gamesTotal: bookingReview?.gamesTotal ?? 0,
+        games: bookingReview?.pricedGames
+          ?? selectedGamesObjects.map((g) => ({ id: g.id, name: g.name, price: Number(g.price) || 0 })),
         basePrice: slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours),
         ratePerPersonPerHour: slotPricing?.ratePerPersonPerHour ?? getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)),
         playerType: slotPricing?.playerType ?? (bookingPlayers === 1 ? 'SINGLE_PLAYER' : 'MULTIPLAYER'),
-        calculationFormula: slotPricing?.calculationFormula ?? `₹${getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers))}/hr × ${bookingPlayers} × ${bookingHours} = ₹${(getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours}`
+        calculationFormula: slotPricing?.calculationFormula
+          ?? `Setup ₹${bookingReview?.setupPrice ?? 0} + games ₹${bookingReview?.gamesTotal ?? 0}`,
+        originalAmount: bookingReview?.originalAmount,
+        totalAmount: bookingReview?.totalAmount,
       },
       offers: {
         ...(selectedOfferIds.length > 0 ? { appliedOfferIds: selectedOfferIds } : {}),
         appliedOffers: selectedOffersObjects,
-        originalAmount: bookingReview?.gameplayOriginalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
-        // The offers block describes offers only; coupons are sent separately and priced by the API.
-        discountApplied: hasCoupons ? offerOnlyDiscount : (bookingReview?.discountApplied || 0),
-        totalAmount: hasCoupons
-          ? Math.max(0, (bookingReview?.gameplayOriginalAmount ?? 0) - offerOnlyDiscount)
-          : (bookingReview?.gameplayTotalAmount || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)))
+        // Offers block describes setup discounts only; coupons and game premiums are priced by the API.
+        originalAmount: bookingReview?.setupPrice
+          || bookingReview?.gameplayOriginalAmount
+          || (slotPricing?.basePrice ?? (getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) * bookingPlayers * bookingHours)),
+        discountApplied: hasCoupons ? offerOnlyDiscount : (bookingReview?.offerDiscount || bookingReview?.discountApplied || 0),
+        totalAmount: Math.max(
+          0,
+          (bookingReview?.setupPrice ?? bookingReview?.gameplayOriginalAmount ?? 0)
+            - (hasCoupons ? offerOnlyDiscount : (bookingReview?.offerDiscount || bookingReview?.discountApplied || 0)),
+        ),
       },
       // Codes are redeemed together with the booking; payment defaults to the discounted total.
       ...(hasCoupons ? { couponCodes: appliedCoupons } : {})
@@ -4093,7 +4130,9 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                 <div className="game-card-info" style={{ padding: '8px 10px' }}>
                                                   <span className="game-card-name" style={{ fontSize: '0.82rem' }} title={game.name}>{game.name}</span>
                                                   <span style={{ fontSize: '0.68rem', color: isSelected ? 'var(--accent)' : 'var(--text-muted)', fontWeight: isSelected ? 600 : 400 }}>
-                                                    {isSelected ? '✓ Selected' : 'Click to select'}
+                                                    {Number(game.price) > 0
+                                                      ? `+₹${game.price} premium`
+                                                      : (isSelected ? '✓ Selected' : 'No premium')}
                                                   </span>
                                                 </div>
                                               </div>
@@ -4126,9 +4165,11 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               {/* ── STEP 5: Booking Details & Slot Timing ── */}
                               {bookingStep === 5 && (() => {
                                 const parsedTime = parseTimeComponents(bookingTime);
-                                const estimatedBase = slotPricing ? slotPricing.basePrice : ((getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours);
+                                const estimatedSetup = slotPricing ? slotPricing.basePrice : ((getSetupRateForPlayers(selectedInstanceForBooking.setup, Number(bookingPlayers)) || 0) * bookingPlayers * bookingHours);
                                 const calculatedEnd = calculateSlotEndTime(bookingTime, bookingHours);
                                 const selectedGamesObjects = availableGames.filter((g) => selectedGameIds.includes(g.id));
+                                const estimatedGamesTotal = selectedGamesObjects.reduce((sum, game) => sum + (Number(game.price) || 0), 0);
+                                const estimatedBase = estimatedSetup + estimatedGamesTotal;
 
                                 return (
                                   <form onSubmit={handleProceedToReview}>
@@ -4420,6 +4461,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                               {selectedInstanceForBooking.setup.consoleType} · {selectedInstanceForBooking.setup.name}
                                             </div>
                                           )}
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                            <span>Setup ₹{estimatedSetup}{estimatedGamesTotal > 0 ? ` · Games ₹${estimatedGamesTotal}` : ''}</span>
+                                            {estimatedGamesTotal > 0 && <span style={{ color: 'var(--warning)' }}>Game premiums are flat</span>}
+                                          </div>
                                         </div>
                                       </div>
                                     </div>
@@ -4437,6 +4482,15 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               {/* ── STEP 6: Select Offers (Evaluated via /api/offers/evaluate/actual) ── */}
                               {bookingStep === 6 && bookingReview && (() => {
                                 const selectedGamesObjects = availableGames.filter((g) => selectedGameIds.includes(g.id));
+                                const live = couponPreview;
+                                const setupPrice = live?.setupPrice ?? bookingReview.setupPrice ?? bookingReview.originalAmount ?? 0;
+                                const gamesTotal = live?.gamesTotal ?? bookingReview.gamesTotal ?? 0;
+                                const pricedGames = (live?.games?.length ? live.games : bookingReview.pricedGames)
+                                  ?? selectedGamesObjects.map((g) => ({ id: g.id, name: g.name, price: Number(g.price) || 0 }));
+                                const offerDiscount = live?.offerDiscount ?? bookingReview.offerDiscount ?? 0;
+                                const couponDiscount = live?.couponDiscount ?? 0;
+                                const liveTotal = live?.totalAmount
+                                  ?? Math.max(0, setupPrice - offerDiscount - couponDiscount) + gamesTotal;
 
                                 return (
                                   <div>
@@ -4487,18 +4541,28 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                               <span style={{ fontWeight: 600 }}>{selectedGamesObjects.map((g) => g.name).join(', ')}</span>
                                             </>
                                           )}
-                                          <span style={{ color: 'var(--text-muted)' }}>Rate Calculation</span><span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: '0.74rem' }}>{bookingReview.priceCalculationText}</span>
+                                          <span style={{ color: 'var(--text-muted)' }}>Setup</span><span style={{ fontWeight: 600 }}>₹{setupPrice}</span>
+                                          <span style={{ color: 'var(--text-muted)' }}>Game premiums</span>
+                                          <span style={{ fontWeight: 600 }}>
+                                            {gamesTotal > 0
+                                              ? `₹${gamesTotal} (${pricedGames.filter((g: { price: number }) => g.price > 0).map((g: { name: string; price: number }) => `${g.name} ₹${g.price}`).join(', ') || 'included'})`
+                                              : '₹0'}
+                                          </span>
+                                          {(offerDiscount > 0 || couponDiscount > 0) && (
+                                            <>
+                                              <span style={{ color: 'var(--text-muted)' }}>Discounts</span>
+                                              <span style={{ fontWeight: 700, color: 'var(--success)' }}>
+                                                −₹{offerDiscount + couponDiscount}
+                                                {offerDiscount > 0 && couponDiscount > 0 ? ` (offers ₹${offerDiscount} · coupons ₹${couponDiscount})` : ''}
+                                              </span>
+                                            </>
+                                          )}
                                         </div>
                                         <div style={{ borderTop: '1px solid var(--border)', marginTop: '10px', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                                            Original: ₹{bookingReview.originalAmount}
-                                            {bookingReview.discountApplied > 0 && (
-                                              <span style={{ color: 'var(--success)', marginLeft: 6, fontWeight: 700 }}>
-                                                − ₹{bookingReview.discountApplied}
-                                              </span>
-                                            )}
+                                            Setup + games: ₹{setupPrice + gamesTotal}
                                           </div>
-                                          <div style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--accent)' }}>₹{bookingReview.totalAmount}</div>
+                                          <div style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--accent)' }}>₹{liveTotal}</div>
                                         </div>
                                       </div>
 
@@ -4627,7 +4691,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                     <div>
                                       <h4 style={{ margin: '0 0 4px', color: 'var(--text-heading)' }}>Add items to this booking</h4>
                                       <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.76rem' }}>
-                                        Optional. Offers discount gameplay only. Add-ons retain their full price.
+                                        Optional. Offers and coupons discount setup only. Game premiums and add-ons stay full price.
                                       </p>
                                     </div>
                                     <AddOnSelector
@@ -4903,7 +4967,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                     <span style={{ fontSize: '0.8rem' }}>🎟️</span>
                                                     <div>
                                                       <div style={{ fontWeight: 800, fontSize: '0.76rem', color: 'var(--text-heading)', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' }}>{code}</div>
-                                                      <div style={{ fontSize: '0.68rem', color: 'var(--success)' }}>Covers one player&apos;s gameplay · redeemed on confirm</div>
+                                                      <div style={{ fontSize: '0.68rem', color: 'var(--success)' }}>Covers one player&apos;s setup · game premiums stay chargeable</div>
                                                     </div>
                                                   </div>
                                                   <span style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--success)' }}>
@@ -4914,16 +4978,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                             </div>
                                           )}
 
-                                          {/* Total Ledger */}
+                                          {/* Total Ledger — setup discounts first, flat game premiums after */}
                                           <div style={{ borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                                              <span>Gameplay Subtotal</span>
-                                              <span>₹{bookingReview.gameplayOriginalAmount ?? bookingReview.originalAmount}</span>
+                                              <span>Setup (console × players × hours)</span>
+                                              <span>₹{bookingReview.setupPrice ?? bookingReview.gameplayOriginalAmount ?? 0}</span>
                                             </div>
-                                            {(bookingReview.offerDiscount ?? bookingReview.discountApplied) > 0 && (
+                                            {(bookingReview.offerDiscount ?? 0) > 0 && (
                                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--success)', fontWeight: 600 }}>
                                                 <span>Promotional Discount</span>
-                                                <span>−₹{bookingReview.offerDiscount ?? bookingReview.discountApplied}</span>
+                                                <span>−₹{bookingReview.offerDiscount}</span>
                                               </div>
                                             )}
                                             {bookingReview.couponDiscount > 0 && (
@@ -4931,6 +4995,20 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                                 <span>Coupon Discount ({appliedCoupons.length})</span>
                                                 <span>−₹{bookingReview.couponDiscount}</span>
                                               </div>
+                                            )}
+                                            {(bookingReview.gamesTotal ?? 0) > 0 && (
+                                              <>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                                  <span>Game premiums</span>
+                                                  <span>₹{bookingReview.gamesTotal}</span>
+                                                </div>
+                                                {(bookingReview.pricedGames || []).filter((g: { price: number }) => g.price > 0).map((g: { id: number; name: string; price: number }) => (
+                                                  <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', paddingLeft: '8px' }}>
+                                                    <span>{g.name}</span>
+                                                    <span>₹{g.price}</span>
+                                                  </div>
+                                                ))}
+                                              </>
                                             )}
                                             {bookingReview.addOnsTotal > 0 && (
                                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
@@ -4972,13 +5050,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                   </>
                 )}
 
-                {activeDashboardTab === 'schedule' && (
+                {activeDashboardTab === 'schedule' && authToken && (
                   <UpcomingScheduleList
                     upcoming={upcomingSchedule}
                     isLoading={isScheduleLoading}
                     error={scheduleError}
                     stations={occupancyData.map((inst) => ({ id: inst.instanceId, name: inst.instanceName }))}
+                    token={authToken}
                     onRefresh={() => fetchScheduleData(false)}
+                    onChanged={() => {
+                      void fetchScheduleData(true);
+                      void fetchOccupancyData(true);
+                    }}
+                    onUnauthorized={() => expireSession()}
                     startCountdownMap={startCountdownMap}
                     timezone={scheduleTimezone}
                   />
@@ -6250,9 +6334,25 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>New End Time:</span>
                                   <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text-heading)' }}>⏱ {formatTimeStr(extensionPreview.extensionPreview.newEndTime)}</span>
                                 </div>
+                                {extensionPreview.extensionPreview.pricing.setupPrice != null && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Setup after extension:</span>
+                                    <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.setupPrice}</span>
+                                  </div>
+                                )}
+                                {(extensionPreview.extensionPreview.pricing.gamesTotal ?? 0) > 0 && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Game premiums (unchanged):</span>
+                                    <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.gamesTotal}</span>
+                                  </div>
+                                )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Original Amount:</span>
-                                  <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.originalAmount}</span>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>New session total:</span>
+                                  <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.totalAmount}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Previous total:</span>
+                                  <span style={{ fontSize: '0.88rem', fontWeight: 700 }}>₹{extensionPreview.extensionPreview.pricing.previousTotalAmount}</span>
                                 </div>
                                 {extensionPreview.extensionPreview.pricing.discountApplied > 0 && (
                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -6261,7 +6361,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                   </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: '6px' }}>
-                                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>Additional Amount Due at Termination:</span>
+                                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-heading)' }}>Additional due (setup hours only):</span>
                                   <span style={{ fontSize: '1.1rem', fontWeight: 900, color: 'var(--accent)' }}>₹{extensionPreview.extensionPreview.pricing.additionalAmountToPay}</span>
                                 </div>
                               </div>

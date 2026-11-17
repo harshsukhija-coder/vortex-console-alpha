@@ -1,0 +1,98 @@
+.schedule-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid var(--success-border);
+  border-radius: 8px;
+  background: var(--success-light);
+  padding: 10px 12px;
+  color: var(--success);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.schedule-success-banner span {
+  flex: 1;
+}
+
+.schedule-success-banner button {
+  border: 1px solid var(--success-border);
+  border-radius: 7px;
+  background: transparent;
+  padding: 4px 10px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.schedule-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.schedule-card-actions .btn-card-action {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  font-size: 0.76rem;
+  padding: 7px 10px;
+}
+
+.btn-card-action.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.btn-card-action.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.schedule-edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.schedule-edit-grid .form-group.full {
+  grid-column: 1 / -1;
+}
+
+.schedule-time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.8fr;
+  gap: 8px;
+}
+
+.schedule-price-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.schedule-dialog-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  margin: 0 auto 10px;
+  border-radius: 12px;
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .schedule-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}

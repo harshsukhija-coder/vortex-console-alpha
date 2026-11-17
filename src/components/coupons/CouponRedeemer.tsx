@@ -68,7 +68,7 @@ export default function CouponRedeemer({
           </span>
           <div>
             <strong>Coupon codes</strong>
-            <span>Each coupon covers one player&apos;s share of gameplay. Add-ons are never discounted.</span>
+            <span>Each coupon covers one player&apos;s share of setup time. Game premiums and add-ons are never discounted.</span>
           </div>
         </div>
         <div className="coupon-meter" title={`${codes.length} of ${maxAllowed} players covered`}>
