@@ -33,6 +33,9 @@ import {
 } from './lib/bookingAddOns';
 import {
   fetchSetupSessionStatus,
+  getCheckoutGameplayAfterOffers,
+  getCheckoutInitialGameplay,
+  getCheckoutStartedAt,
   type CheckoutPreview,
   type SetupSessionStatus,
 } from './lib/setupSession';
@@ -78,6 +81,7 @@ interface BookingCustomer {
 interface BookingGame {
   id: number;
   name: string;
+  price?: number;
 }
 
 // Booking Details from API
@@ -401,7 +405,9 @@ function App() {
   // Custom End Session Module States
   const [terminatingInstance, setTerminatingInstance] = useState<SetupInstance | null>(null);
   const [terminateEndTime, setTerminateEndTime] = useState<string>('');
+  const [terminateStartTime, setTerminateStartTime] = useState<string>('');
   const [checkoutPreview, setCheckoutPreview] = useState<CheckoutPreview | null>(null);
+  const [checkoutPreviewError, setCheckoutPreviewError] = useState<string | null>(null);
   const [isCheckoutPreviewLoading, setIsCheckoutPreviewLoading] = useState(false);
   const [terminateCashAmount, setTerminateCashAmount] = useState<number>(0);
   const [terminateUpiAmount, setTerminateUpiAmount] = useState<number>(0);
@@ -2103,10 +2109,14 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   const applyCheckoutStatus = (instance: SetupInstance, status: SetupSessionStatus) => {
     const preview = status.checkoutPreview;
     if (!preview) {
-      throw new Error('The termination API did not return a checkout preview.');
+      throw new Error(
+        status.checkoutPreviewError
+          || 'The termination API did not return a checkout preview.',
+      );
     }
 
     const previousSession = status.previousSession;
+    const startedAt = getCheckoutStartedAt(preview, previousSession);
     if (previousSession && instance.currentBooking) {
       setTerminatingInstance({
         ...instance,
@@ -2120,13 +2130,25 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
             : instance.currentBooking.customer,
           games: previousSession.games,
           playersCount: previousSession.playersCount,
-          startTime: preview.timing.actualStartTime,
+          startTime: startedAt || instance.currentBooking.startTime,
         },
       });
     }
 
     setCheckoutPreview(preview);
-    setTerminateEndTime(formatDateForDatetimeInput(new Date(preview.timing.proposedEndTime)));
+    setCheckoutPreviewError(status.checkoutPreviewError ?? null);
+    const proposedEnd = preview.timing.proposedEndTime
+      ? new Date(preview.timing.proposedEndTime)
+      : new Date();
+    setTerminateEndTime(formatDateForDatetimeInput(
+      Number.isNaN(proposedEnd.getTime()) ? new Date() : proposedEnd,
+    ));
+    if (startedAt) {
+      const startedLocal = new Date(startedAt);
+      if (!Number.isNaN(startedLocal.getTime())) {
+        setTerminateStartTime(formatDateForDatetimeInput(startedLocal));
+      }
+    }
     setTerminateCashAmount(preview.settlement.cashAmount);
     setTerminateUpiAmount(preview.settlement.upiAmount);
   };
@@ -2136,6 +2158,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     endTime: string,
     cashAmount?: number,
     upiAmount?: number,
+    startTime?: string,
   ) => {
     const parsedEndTime = new Date(endTime);
     if (Number.isNaN(parsedEndTime.getTime())) return;
@@ -2145,8 +2168,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     setTerminateError(null);
     try {
       const token = authToken || localStorage.getItem('vortex_auth_token') || '';
+      const parsedStart = startTime ? new Date(startTime) : null;
       const status = await fetchSetupSessionStatus(instance.instanceId, token, {
         actualEndTime: parsedEndTime.toISOString(),
+        ...(parsedStart && !Number.isNaN(parsedStart.getTime())
+          ? { actualStartTime: parsedStart.toISOString() }
+          : {}),
         ...(cashAmount !== undefined ? { cashAmount } : {}),
         ...(upiAmount !== undefined ? { upiAmount } : {}),
       });
@@ -2155,6 +2182,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     } catch (error) {
       if (requestId !== checkoutPreviewRequestRef.current) return;
       setCheckoutPreview(null);
+      setCheckoutPreviewError(null);
       setTerminateError(error instanceof Error ? error.message : 'Could not load checkout details.');
     } finally {
       if (requestId === checkoutPreviewRequestRef.current) setIsCheckoutPreviewLoading(false);
@@ -2164,12 +2192,19 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   const openTerminateModal = (instance: SetupInstance) => {
     if (!instance.currentBooking) return;
     const endTime = formatDateForDatetimeInput(new Date());
+    const startSource = instance.currentBooking.startTime;
+    const startParsed = startSource ? new Date(startSource) : null;
+    const startTime = startParsed && !Number.isNaN(startParsed.getTime())
+      ? formatDateForDatetimeInput(startParsed)
+      : '';
     setTerminatingInstance(instance);
     setCheckoutPreview(null);
+    setCheckoutPreviewError(null);
     setTerminateEndTime(endTime);
+    setTerminateStartTime(startTime);
     setTerminateCashAmount(0);
     setTerminateUpiAmount(0);
-    void loadCheckoutPreview(instance, endTime);
+    void loadCheckoutPreview(instance, endTime, undefined, undefined, startTime || undefined);
   };
 
   function openPreviousSessionTerminationModal(
@@ -2177,11 +2212,10 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
     status: SetupSessionStatus,
   ) {
     const previousSession = status.previousSession;
-    const sessionStartTime = status.checkoutPreview?.timing.actualStartTime
-      ?? previousSession?.actualStartTime
-      ?? previousSession?.scheduledStartTime;
+    const sessionStartTime = getCheckoutStartedAt(status.checkoutPreview, previousSession);
     if (!previousSession || !sessionStartTime) {
-      const message = 'The termination API did not return the previous session start time.';
+      const message = status.checkoutPreviewError
+        || 'The termination API did not return the previous session start time.';
       setOccupancyError(message);
       setBookingFormError(message);
       setConfirmError(message);
@@ -2204,7 +2238,8 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         originalAmount: Number(previousSession.originalAmount ?? amountCharged),
         amountCharged,
         timeLeftMinutes: 0,
-        timeLeftFormatted: 'Session ended'
+        timeLeftFormatted: 'Session ended',
+        games: previousSession.games,
       }
     };
 
@@ -2219,21 +2254,52 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
   const handleTerminateEndTimeChange = (val: string) => {
     setTerminateEndTime(val);
     if (terminatingInstance) {
-      void loadCheckoutPreview(terminatingInstance, val, terminateCashAmount, terminateUpiAmount);
+      void loadCheckoutPreview(
+        terminatingInstance,
+        val,
+        terminateCashAmount,
+        terminateUpiAmount,
+        terminateStartTime || undefined,
+      );
+    }
+  };
+
+  const handleTerminateStartTimeChange = (val: string) => {
+    setTerminateStartTime(val);
+    if (terminatingInstance) {
+      void loadCheckoutPreview(
+        terminatingInstance,
+        terminateEndTime,
+        terminateCashAmount,
+        terminateUpiAmount,
+        val || undefined,
+      );
     }
   };
 
   const handleTerminateCashChange = (cashAmount: number) => {
     setTerminateCashAmount(cashAmount);
     if (terminatingInstance) {
-      void loadCheckoutPreview(terminatingInstance, terminateEndTime, cashAmount, terminateUpiAmount);
+      void loadCheckoutPreview(
+        terminatingInstance,
+        terminateEndTime,
+        cashAmount,
+        terminateUpiAmount,
+        terminateStartTime || undefined,
+      );
     }
   };
 
   const handleTerminateUpiChange = (upiAmount: number) => {
     setTerminateUpiAmount(upiAmount);
     if (terminatingInstance) {
-      void loadCheckoutPreview(terminatingInstance, terminateEndTime, terminateCashAmount, upiAmount);
+      void loadCheckoutPreview(
+        terminatingInstance,
+        terminateEndTime,
+        terminateCashAmount,
+        upiAmount,
+        terminateStartTime || undefined,
+      );
     }
   };
 
@@ -2267,8 +2333,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          actualStartTime: checkoutPreview.timing.actualStartTime,
-          actualEndTime: checkoutPreview.timing.proposedEndTime,
+          actualStartTime:
+            getCheckoutStartedAt(checkoutPreview)
+            || (terminateStartTime ? new Date(terminateStartTime).toISOString() : undefined),
+          actualEndTime:
+            checkoutPreview.timing.proposedEndTime
+            || new Date(terminateEndTime).toISOString(),
           finalAmountCharged: checkoutPreview.settlement.totalPayable,
           cashAmount: Number(terminateCashAmount) || 0,
           upiAmount: Number(terminateUpiAmount) || 0
@@ -6594,10 +6664,16 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                               </div>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: '6px' }}>
-                              <span>Started At: <strong style={{ color: 'var(--text-heading)' }}>{checkoutPreview ? formatTimeStr(checkoutPreview.timing.actualStartTime) : 'Loading...'}</strong></span>
-                              <span>Initial Gameplay: <strong>₹{checkoutPreview?.gameplay.initialAmount ?? '...'}</strong></span>
+                              <span>Started At: <strong style={{ color: 'var(--text-heading)' }}>{checkoutPreview ? formatTimeStr(getCheckoutStartedAt(checkoutPreview) || '') : 'Loading...'}</strong></span>
+                              <span>Initial Gameplay: <strong>₹{checkoutPreview ? getCheckoutInitialGameplay(checkoutPreview) : '...'}</strong></span>
                             </div>
                           </div>
+
+                          {checkoutPreviewError && (
+                            <div className="form-error-banner" style={{ background: 'var(--warning-light)', borderColor: 'var(--warning-border)', color: 'var(--warning)' }}>
+                              <span>{checkoutPreviewError}</span>
+                            </div>
+                          )}
 
                           {isCheckoutPreviewLoading && (
                             <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
@@ -6605,26 +6681,39 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             </div>
                           )}
 
-                          {/* Adjust End Time */}
-                          <div className="form-group" style={{ marginTop: '4px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                              <label className="form-label" htmlFor="terminate-end-time" style={{ margin: 0 }}>Adjust Session End Time</label>
-                              <button
-                                type="button"
-                                style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}
-                                onClick={() => handleTerminateEndTimeChange(formatDateForDatetimeInput(new Date()))}
-                              >
-                                ↺ Reset to Current Time
-                              </button>
+                          {/* Adjust start/end — pass actualStartTime when they started early */}
+                          <div className="form-row-2col" style={{ marginTop: '4px' }}>
+                            <div className="form-group" style={{ margin: 0 }}>
+                              <label className="form-label" htmlFor="terminate-start-time" style={{ margin: 0 }}>Actual start time</label>
+                              <input
+                                type="datetime-local"
+                                id="terminate-start-time"
+                                className="form-input"
+                                value={terminateStartTime}
+                                onChange={(e) => handleTerminateStartTimeChange(e.target.value)}
+                                required
+                              />
                             </div>
-                            <input 
-                              type="datetime-local"
-                              id="terminate-end-time"
-                              className="form-input"
-                              value={terminateEndTime}
-                              onChange={(e) => handleTerminateEndTimeChange(e.target.value)}
-                              required
-                            />
+                            <div className="form-group" style={{ margin: 0 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                <label className="form-label" htmlFor="terminate-end-time" style={{ margin: 0 }}>Actual end time</label>
+                                <button
+                                  type="button"
+                                  style={{ background: 'none', border: 'none', color: 'var(--accent)', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                                  onClick={() => handleTerminateEndTimeChange(formatDateForDatetimeInput(new Date()))}
+                                >
+                                  ↺ Now
+                                </button>
+                              </div>
+                              <input
+                                type="datetime-local"
+                                id="terminate-end-time"
+                                className="form-input"
+                                value={terminateEndTime}
+                                onChange={(e) => handleTerminateEndTimeChange(e.target.value)}
+                                required
+                              />
+                            </div>
                           </div>
 
                           {/* Server-calculated duration and gameplay price */}
@@ -6639,11 +6728,34 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                             </div>
                             <div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Gameplay</div>
-                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>₹{checkoutPreview?.gameplay.amountAfterOffers ?? 0}</div>
+                              <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-heading)', marginTop: '2px' }}>₹{getCheckoutGameplayAfterOffers(checkoutPreview)}</div>
                             </div>
                           </div>
 
-                          {checkoutPreview && checkoutPreview.addOns.items.length > 0 && (
+                          {checkoutPreview && ((checkoutPreview.games?.total ?? 0) > 0 || (checkoutPreview.gameplay.setupAmount != null)) && (
+                            <div className="review-card">
+                              <div className="review-card-header">
+                                <div className="review-card-title">Setup + game premiums</div>
+                                <strong style={{ color: 'var(--accent)' }}>
+                                  ₹{(checkoutPreview.gameplay.setupAmount ?? 0) + (checkoutPreview.games?.total ?? checkoutPreview.gameplay.gamesTotal ?? 0)}
+                                </strong>
+                              </div>
+                              {checkoutPreview.gameplay.setupAmount != null && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                                  <span>Setup ({checkoutPreview.timing.billedHours}h × ₹{checkoutPreview.setupPricing.ratePerPersonPerHour}/hr)</span>
+                                  <span>₹{checkoutPreview.gameplay.setupAmount}</span>
+                                </div>
+                              )}
+                              {(checkoutPreview.games?.items || []).map((game) => (
+                                <div key={game.id} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                                  <span>{game.name}</span>
+                                  <span>₹{game.price ?? 0}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {checkoutPreview?.addOns && checkoutPreview.addOns.items.length > 0 && (
                             <div className="review-card">
                               <div className="review-card-header">
                                 <div className="review-card-title">Add-ons</div>
@@ -6803,7 +6915,7 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
                                   {sessionSummaryResult.gamesPlayed.map((g: any) => (
                                     <span key={g.id} className="review-game-pill" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
-                                      🎮 {g.name}
+                                      🎮 {g.name}{g.price != null ? ` · ₹${g.price}` : ''}
                                     </span>
                                   ))}
                                 </div>
@@ -6906,6 +7018,18 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                           )}
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', borderTop: '1px solid var(--border)', paddingTop: '6px', marginTop: '2px' }}>
+                            {sessionSummaryResult.billing?.setupAmount != null && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                <span>Setup</span>
+                                <span>₹{sessionSummaryResult.billing.setupAmount}</span>
+                              </div>
+                            )}
+                            {sessionSummaryResult.billing?.gamesTotal != null && sessionSummaryResult.billing.gamesTotal > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                <span>Game premiums</span>
+                                <span>₹{sessionSummaryResult.billing.gamesTotal}</span>
+                              </div>
+                            )}
                             {sessionSummaryResult.billing?.gameplayAmountAfterOffers !== undefined && (
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
                                 <span>Gameplay after offers</span>
@@ -6918,10 +7042,12 @@ const fetchTentativeBookings = useCallback(async (dateStr: string) => {
                                 <span>₹{sessionSummaryResult.billing.addOnsTotal}</span>
                               </div>
                             )}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
-                              <span>Original Total</span>
-                              <span>₹{sessionSummaryResult.billing?.originalAmount}</span>
-                            </div>
+                            {sessionSummaryResult.billing?.originalAmount != null && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+                                <span>Original Total</span>
+                                <span>₹{sessionSummaryResult.billing.originalAmount}</span>
+                              </div>
+                            )}
                             {sessionSummaryResult.billing?.discountApplied > 0 && (
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: 'var(--success)', fontWeight: 600 }}>
                                 <span>Promotional Discount</span>
